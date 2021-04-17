@@ -12,7 +12,6 @@
 #include <gmp.h>
 #include <gmpxx.h>
 
-#include "baseclient.h"
 #include "cudautil.h"
 #include "uint256.h"
 #include "sha256.h"

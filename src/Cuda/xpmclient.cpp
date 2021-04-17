@@ -1144,6 +1144,86 @@ int XPMClient::GetStats(proto::ClientStats& stats) {
 	
 }
 
+int main() {
+	
+	unsigned nw = mWorkers.size();
+	std::vector<bool> running(nw);
+	std::vector<stats_t> wstats(nw);
+	
+	while (czmq_poll(mStatsPull, 0)) {
+		zmq_msg_t msg;
+		zmq_msg_init(&msg);
+		zmq_recvmsg(mStatsPull, &msg, 0);          
+		size_t fsize = zmq_msg_size(&msg);
+		uint8_t *fbytes = (uint8_t*)zmq_msg_data(&msg);
+		if(fsize >= sizeof(stats_t)) {
+			stats_t* tmp = (stats_t*)fbytes;
+			if(tmp->id < nw){
+				running[tmp->id] = true;
+				wstats[tmp->id] = *tmp;
+			}
+		}
+		
+		zmq_msg_close(&msg); 
+	}
+
+	double cpd = 0;
+	unsigned errors = 0;
+	int maxtemp = 0;
+	unsigned ngpus = 0;
+  int crashed = 0;
+  
+	for(unsigned i = 0; i < nw; ++i){
+		
+		int devid = mDeviceMapRev[i];
+		int temp = gpu_temp(devid);
+		int activity = gpu_activity(devid);
+		
+		if(temp > maxtemp)
+			maxtemp = temp;
+		
+		cpd += wstats[i].cpd;
+		errors += wstats[i].errors;
+		
+		if(running[i]){
+			ngpus++;
+      LOG_F(INFO, "[GPU %d] T=%dC A=%d%% E=%d primes=%f fermat=%d/sec cpd=%.2f/day",
+					i, temp, activity, wstats[i].errors, wstats[i].primeprob, wstats[i].fps, wstats[i].cpd);
+		}else if(!mWorkers[i].first)
+      LOG_F(ERROR, "[GPU %d] failed to start!\n", i);
+		else if(mPaused) {
+      LOG_F(INFO, "[GPU %d] paused", i);
+    } else {
+      crashed++;
+      LOG_F(ERROR, "[GPU %d] crashed!", i);
+    }
+		
+	}
+	
+  if (crashed && onCrash[0] != '\0') {
+    LOG_F(INFO, "Run command %s", onCrash);
+    loguru::flush();
+    system(onCrash);
+  }
+	
+	if(mStatCounter % 10 == 0)
+		for(unsigned i = 0; i < mNumDevices; ++i){
+			int gpuid = mDeviceMap[i];
+			if(gpuid >= 0)
+        LOG_F(INFO, "GPU %d: core=%dMHz mem=%dMHz powertune=%d fanspeed=%d",
+						gpuid, gpu_engineclock(i), gpu_memclock(i), gpu_powertune(i), gpu_fanspeed(i));
+		}
+	
+	stats.set_cpd(cpd);
+	stats.set_errors(errors);
+	stats.set_temp(maxtemp);
+	
+	mStatCounter++;
+	
+	return ngpus;
+	
+}
+
 
 void XPMClient::Toggle()
 {
