@@ -11,12 +11,6 @@
 #include "prime.h"
 #include "benchmarks.h"
 
-extern "C" {
-	#include "adl.h"
-}
-
-#include "loguru.hpp"
-
 #include <fstream>
 #include <set>
 #include <memory>
