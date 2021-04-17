@@ -110,6 +110,7 @@ if (CUDA_FOUND)
   add_executable(xpmclientnv
     xpmclient.cpp
     benchmarks.cpp
+    cudautil.cpp
   )
 
   target_include_directories(xpmclientnv PUBLIC
