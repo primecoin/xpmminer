@@ -3,6 +3,7 @@
 
 #include <cuda.h>
 #include <nvrtc.h>
+#include "loguru.hpp"
 #include <string>
 #include <vector>
 
