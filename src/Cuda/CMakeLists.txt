@@ -77,17 +77,12 @@ else()
   endif()
 endif()
 
-file(GLOB config4cppFiles "${CMAKE_SOURCE_DIR}/config4cpp/src/*.cpp")
-add_library(config4cpp ${config4cppFiles})
-
-PROTOBUF_GENERATE_CPP(ProtoSources ProtoHeaders ${CMAKE_SOURCE_DIR}/protocol.proto)
 
 set(LIBRARIES
   ${ZMQ_LIBRARY}
   ${SODIUM_LIBRARY}
   ${GMP_LIBRARY}
   ${PROTOBUF_LIBRARY}
-  config4cpp
 )
 
 if (WIN32)
@@ -113,17 +108,8 @@ if (CUDA_FOUND)
   )
 
   add_executable(xpmclientnv
-    adl.cpp
-    baseclient.cpp
-    cudautil.cpp
-    loguru.cpp
-    prime.cpp
-    primes.cpp
-    sha256.cpp
-    zmqextras.cpp
-    xpm/cuda/xpmclient.cpp
-    xpm/cuda/benchmarks.cpp
-    ${ProtoSources}
+    xpmclient.cpp
+    benchmarks.cpp
   )
 
   target_include_directories(xpmclientnv PUBLIC
