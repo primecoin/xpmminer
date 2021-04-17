@@ -111,6 +111,7 @@ if (CUDA_FOUND)
     xpmclient.cpp
     benchmarks.cpp
     cudautil.cpp
+    sha256.cpp
   )
 
   target_include_directories(xpmclientnv PUBLIC
