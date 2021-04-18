@@ -760,6 +760,12 @@ int main() {
 			return false;
 		}
   }
+  int depth = 5 - 1;
+	depth = std::max(depth, 2);
+	depth = std::min(depth, 5);
+  for (unsigned i = 0; i < gpus.size(); i++) {
+    cudaRunBenchmarks(gpus[i].context, gpus[i].device, modules[i], depth, clKernelLSize);
+  }
 
   return 0;
 }
