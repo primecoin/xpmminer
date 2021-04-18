@@ -690,6 +690,18 @@ void dumpSieveConstants(unsigned weaveDepth,
 }
 
 int main() {
+
+  {
+		int np = sizeof(gPrimes)/sizeof(unsigned);
+		gPrimes2.resize(np*2);
+		for(int i = 0; i < np; ++i){
+			unsigned prime = gPrimes[i];
+			float fiprime = 1.f / float(prime);
+			gPrimes2[i*2] = prime;
+			memcpy(&gPrimes2[i*2+1], &fiprime, sizeof(float));
+		}
+	}
+  
   unsigned clKernelLSize = 1024;
   unsigned clKernelLSizeLog2 = 10;
 	std::vector<CUDADeviceInfo> gpus;
