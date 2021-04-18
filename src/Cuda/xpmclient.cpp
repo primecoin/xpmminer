@@ -737,7 +737,7 @@ int main() {
     unsigned clKernelTarget = 10;
     unsigned clKernelWidth = 20;
     unsigned multiplierSizeLimits[3] = {24, 31, 35};
-    std::ofstream config("config.cu", std::fstream::trunc);
+    std::ofstream config("xpm/cuda/config.cu", std::fstream::trunc);
     config << "#define STRIPES " << clKernelStripes << '\n';
     config << "#define WIDTH " << clKernelWidth << '\n';
     config << "#define PCOUNT " << clKernelPCount << '\n';
