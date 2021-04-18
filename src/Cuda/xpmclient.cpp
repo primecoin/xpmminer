@@ -717,14 +717,14 @@ int main() {
 
   // generate kernel configuration file
   {
-    unsigned clKernelStripes = 420;
-    unsigned clKernelPCount = 40960;
-    unsigned clKernelWindowSize = 4096;
+    unsigned clKernelStripes = 210;
+    unsigned clKernelPCount = 65536;
+    unsigned clKernelWindowSize = 12288;
     unsigned clKernelLSize = 1024;
     unsigned clKernelLSizeLog2 = 10;
     unsigned clKernelTarget = 10;
-    unsigned clKernelWidth = clKernelTarget*2;
-    unsigned multiplierSizeLimits[3] = {26, 33, 36};
+    unsigned clKernelWidth = 20;
+    unsigned multiplierSizeLimits[3] = {24, 31, 35};
     std::ofstream config("config.cu", std::fstream::trunc);
     config << "#define STRIPES " << clKernelStripes << '\n';
     config << "#define WIDTH " << clKernelWidth << '\n';
