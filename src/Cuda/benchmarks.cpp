@@ -595,16 +595,13 @@ void cudaSieveTestBenchmark(CUfunction *kernels,
 
   cudaBuffer<uint32_t> primeBuf[maxHashPrimorial];
   cudaBuffer<uint32_t> primeBuf2[maxHashPrimorial];
-  LOG_F(INFO, " buffer\n");
   
   for (unsigned i = 0; i < maxHashPrimorial - mPrimorial; i++) {
     CUDA_SAFE_CALL(primeBuf[i].init(mConfig.PCOUNT, true));
     CUDA_SAFE_CALL(primeBuf[i].copyToDevice(&gPrimes[mPrimorial+i+1]));
     CUDA_SAFE_CALL(primeBuf2[i].init(mConfig.PCOUNT*2, true));
-    LOG_F(INFO, " buffer2, %u, %u, %u, gPrimes2[%d] size %u\n", 
       i, maxHashPrimorial, mPrimorial, 2*(mPrimorial+i)+2, gPrimes2.size());
     CUDA_SAFE_CALL(primeBuf2[i].copyToDevice(&gPrimes2[2*(mPrimorial+i)+2]));
-    LOG_F(INFO, " buffer2 finished %u\n", i);
   }
   
   cudaBuffer<uint32_t> modulosBuf[maxHashPrimorial];
@@ -622,8 +619,7 @@ void cudaSieveTestBenchmark(CUfunction *kernels,
     }
     
     CUDA_SAFE_CALL(current.copyToDevice());
-  }  
-  LOG_F(INFO, " current");
+  }
   
   CUDA_SAFE_CALL(hashmod.midstate.init(8, false));
   CUDA_SAFE_CALL(hashmod.found.init(2048, false));
@@ -636,10 +632,8 @@ void cudaSieveTestBenchmark(CUfunction *kernels,
   unsigned hashm[32];
   memset(hashm, 0, sizeof(hashm));
   sha256precalcData precalcData;
-  LOG_F(INFO, " precalc");
 
   while (foundHashNum < 64) {
-    LOG_F(INFO, " foundHashNum %u\n", foundHashNum);
     {
       uint8_t *pHeader = (uint8_t*)&blockheader;
       for (unsigned i = 0; i < sizeof(blockheader); i++)
