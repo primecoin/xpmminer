@@ -26,9 +26,9 @@ set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
   ${CMAKE_SOURCE_DIR}/cmake
 )
 
-include(FindDependencies)
-find_package(Protobuf REQUIRED)
-find_package(OpenCL)
+find_path(GMP_INCLUDE_DIRECTORY gmp.h gmpxx.h)
+find_library(GMP_LIBRARY gmp)
+find_library(GMPXX_LIBRARY gmpxx)
 
 if (NOT CMAKE_CROSSCOMPILING)
   find_package(CUDA)
@@ -48,10 +48,7 @@ endif()
 
 include_directories(
   ${GMP_INCLUDE_DIRECTORY}
-  ${PROTOBUF_INCLUDE_DIRECTORY}
-  ${OpenCL_INCLUDE_DIRS}
   ${OPENSSL_INCLUDE_DIR}
-  ${CMAKE_SOURCE_DIR}/config4cpp/include
   ${CMAKE_BINARY_DIR}
 )
 
@@ -78,9 +75,7 @@ endif()
 
 
 set(LIBRARIES
-  ${SODIUM_LIBRARY}
   ${GMP_LIBRARY}
-  ${PROTOBUF_LIBRARY}
 )
 
 if (WIN32)
