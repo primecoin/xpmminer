@@ -739,5 +739,27 @@ int main() {
     dumpSieveConstants(clKernelPCount, clKernelLSize, clKernelWindowSize*32, gPrimes+13, config);
   }
 
+  std::string arguments = "";
+  std::vector<CUmodule> modules;
+	modules.resize(gpus.size());
+  for (unsigned i = 0; i < gpus.size(); i++) {
+		char kernelname[64];
+		char ccoption[64];
+		sprintf(kernelname, "kernelxpm_gpu%u.ptx", gpus[i].index);
+        sprintf(ccoption, "--gpu-architecture=compute_%i%i", gpus[i].majorComputeCapability, gpus[i].minorComputeCapability);
+    const char *options[] = { ccoption, arguments.c_str() };
+		CUDA_SAFE_CALL(cuCtxSetCurrent(gpus[i].context));
+    if (!cudaCompileKernel(kernelname,
+				{ "xpm/cuda/config.cu", "xpm/cuda/procs.cu", "xpm/cuda/fermat.cu", "xpm/cuda/sieve.cu", "xpm/cuda/sha256.cu", "xpm/cuda/benchmarks.cu"},
+				options,
+        arguments.empty() ? 1 : 2,
+				&modules[i],
+        gpus[i].majorComputeCapability,
+        gpus[i].minorComputeCapability,
+				false)) {
+			return false;
+		}
+  }
+
   return 0;
 }
