@@ -667,6 +667,28 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
 
 }
 
+void dumpSieveConstants(unsigned weaveDepth,
+                                   unsigned threadsNum,
+                                   unsigned windowSize,
+                                   unsigned *primes,
+                                   std::ostream &file) 
+{
+  unsigned ranges[3] = {0, 0, 0};
+  for (unsigned i = 0; i < weaveDepth/threadsNum; i++) {
+    unsigned prime = primes[i*threadsNum];
+    if (ranges[0] == 0 && windowSize/prime <= 2)
+      ranges[0] = i;
+    if (ranges[1] == 0 && windowSize/prime <= 1)
+      ranges[1] = i;
+    if (ranges[2] == 0 && windowSize/prime == 0)
+      ranges[2] = i;
+  }
+
+  file << "#define SIEVERANGE1 " << ranges[0] << "\n";
+  file << "#define SIEVERANGE2 " << ranges[1] << "\n";
+  file << "#define SIEVERANGE3 " << ranges[2] << "\n";
+}
+
 int main() {
   unsigned clKernelLSize = 1024;
   unsigned clKernelLSizeLog2 = 10;
@@ -692,6 +714,30 @@ int main() {
 			gpus.push_back(info);
       LOG_F(INFO, "[%i] %s; Compute capability %i.%i", (int)gpus.size()-1, name, info.majorComputeCapability, info.minorComputeCapability);
 	}
+
+  // generate kernel configuration file
+  {
+    unsigned clKernelStripes = 420;
+    unsigned clKernelPCount = 40960;
+    unsigned clKernelWindowSize = 4096;
+    unsigned clKernelLSize = 1024;
+    unsigned clKernelLSizeLog2 = 10;
+    unsigned clKernelTarget = 10;
+    unsigned clKernelWidth = clKernelTarget*2;
+    unsigned multiplierSizeLimits[3] = {26, 33, 36};
+    std::ofstream config("xpm/cuda/config.cu", std::fstream::trunc);
+    config << "#define STRIPES " << clKernelStripes << '\n';
+    config << "#define WIDTH " << clKernelWidth << '\n';
+    config << "#define PCOUNT " << clKernelPCount << '\n';
+    config << "#define TARGET " << clKernelTarget << '\n';
+    config << "#define SIZE " << clKernelWindowSize << '\n';
+    config << "#define LSIZE " << clKernelLSize << '\n';
+    config << "#define LSIZELOG2 " << clKernelLSizeLog2 << '\n';
+    config << "#define LIMIT13 " << multiplierSizeLimits[0] << '\n';
+    config << "#define LIMIT14 " << multiplierSizeLimits[1] << '\n';
+    config << "#define LIMIT15 " << multiplierSizeLimits[2] << '\n';    
+    dumpSieveConstants(clKernelPCount, clKernelLSize, clKernelWindowSize*32, gPrimes+13, config);
+  }
 
   return 0;
 }
