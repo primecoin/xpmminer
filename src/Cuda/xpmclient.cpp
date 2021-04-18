@@ -756,7 +756,7 @@ int main() {
 				&modules[i],
         gpus[i].majorComputeCapability,
         gpus[i].minorComputeCapability,
-				false)) {
+				true)) {
 			return false;
 		}
   }
