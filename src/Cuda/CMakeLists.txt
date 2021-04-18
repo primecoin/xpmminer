@@ -113,6 +113,7 @@ if (CUDA_FOUND)
     cudautil.cpp
     sha256.cpp
     prime.cpp
+    loguru.cpp
   )
 
   target_include_directories(xpmclientnv PUBLIC

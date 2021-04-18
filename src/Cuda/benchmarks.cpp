@@ -13,6 +13,7 @@
 #include "prime.h"
 #include <math.h> 
 #include <set>
+#include "gprimes.h"
 
 enum CUDAKernels {
   CUDAKernelGenConfig = 0,

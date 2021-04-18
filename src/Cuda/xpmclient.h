@@ -232,35 +232,4 @@ private:
   cudaBuffer<uint32_t> hashBuf;
 };
 
-
-
-
-class XPMClient : public BaseClient {
-public:
-	
-	XPMClient(void* ctx) : 
-	  BaseClient(ctx), clKernelTargetAutoAdjust(true) {}
-	virtual ~XPMClient();
-  
-	bool Initialize(Configuration* cfg, bool benchmarkOnly, unsigned adjustedKernelTarget = 0);
-	void NotifyBlock(const proto::Block& block);
-	bool TakeWork(const proto::Work& work);
-	int GetStats(proto::ClientStats& stats);
-	void Toggle();
-	void setup_adl();
-	
-private:
-	Configuration *_cfg;
-	bool clKernelTargetAutoAdjust;
-	
-  std::vector<std::pair<PrimeMiner*, void*> > mWorkers;
-
-  void dumpSieveConstants(unsigned weaveDepth,
-                          unsigned threadsNum,
-                          unsigned windowSize,
-                          unsigned *primes,
-                          std::ostream &file);
-	
-};
-
 #endif /* XPMCLIENT_H_ */

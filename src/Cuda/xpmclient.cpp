@@ -28,11 +28,6 @@ double GetPrimeDifficulty(unsigned int nBits)
     return ((double) nBits / (double) (1 << nFractionalBits));
 }
 
-BaseClient *createClient(void *ctx)
-{
-  return new XPMClient(ctx);
-}
-
 PrimeMiner::PrimeMiner(unsigned id, unsigned threads, unsigned sievePerRound, unsigned depth, unsigned LSize) {
 	
 	mID = id;
@@ -229,32 +224,11 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
 void PrimeMiner::Mining(void *ctx, void *pipe) {
   cuCtxSetCurrent(_context);
   time_t starttime = time(0);
-	void* blocksub = zmq_socket(ctx, ZMQ_SUB);
-	void* worksub = zmq_socket(ctx, ZMQ_SUB);
-	void* statspush = zmq_socket(ctx, ZMQ_PUSH);
-	void* sharepush = zmq_socket(ctx, ZMQ_PUSH);  
-	
-	zmq_connect(blocksub, "inproc://blocks");
-	zmq_connect(worksub, "inproc://work");
-	zmq_connect(statspush, "inproc://stats");
-	zmq_connect(sharepush, "inproc://shares");        
+	void* blocksub;
+	void* worksub;
+	void* statspush ;
+	void* sharepush ;  
 
-	{
-		const char one[2] = {1, 0};
-		zmq_setsockopt (blocksub, ZMQ_SUBSCRIBE, one, 1);
-		zmq_setsockopt (worksub, ZMQ_SUBSCRIBE, one, 1);
-	}
-	
-	proto::Block block;
-	proto::Work work;
-	proto::Share share;
-	
-	block.set_height(1);
-	work.set_height(0);
-	
-	share.set_addr(gAddr);
-	share.set_name(gClientName);
-	share.set_clientid(gClientID);
 	
 	stats_t stats;
 	stats.id = mID;
@@ -356,21 +330,14 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
     CUDA_SAFE_CALL(current.copyToDevice());
   }    
 
-  czmq_signal(pipe);
-  czmq_poll(pipe, -1);
 
 	bool run = true;
 	while(run){
-    if(czmq_poll(pipe, 0)) {
-      czmq_wait(pipe);
-      czmq_wait(pipe);
-    }
 
 		{
 			time_t currtime = time(0);
 			time_t elapsed = currtime - time1;
-			if(elapsed > 11){
- 				zmq_send(statspush, &stats, sizeof(stats), 0);                          
+			if(elapsed > 11){                      
 				time1 = currtime;
 			}
 			
@@ -387,26 +354,12 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
 		stats.cpd = 24.*3600. * double(stats.fps) * pow(stats.primeprob, mConfig.TARGET);
 		
 		// get work
-		bool reset = false;
-		{
-			bool getwork = true;
-			while(getwork && run){
-        if(czmq_poll(worksub, 0) || work.height() < block.height()){
-					run = ReceivePub(work, worksub);
-					reset = true;
-				}
-				
-				getwork = false;
-        if(czmq_poll(blocksub, 0) || work.height() > block.height()){
-					run = ReceivePub(block, blocksub);
-          getwork = true;
-				}
-			}
-		}
+
 		if(!run)
 			break;
 		
 		// reset if new work
+    bool reset = false;
 		if(reset){
       hashes.clear();
 			hashmod.count[0] = 0;
@@ -426,10 +379,10 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
       }
 
 			blockheader.version = block_t::CURRENT_VERSION;
-			blockheader.hashPrevBlock.SetHex(block.hash());
-			blockheader.hashMerkleRoot.SetHex(work.merkle());
-			blockheader.time = work.time() + mID;
-			blockheader.bits = work.bits();
+			//blockheader.hashPrevBlock.SetHex(block.hash());
+			//blockheader.hashMerkleRoot.SetHex(work.merkle());
+			//blockheader.time = work.time() + mID;
+			//blockheader.bits = work.bits();
 			blockheader.nonce = 1;
 			testParams.nBits = blockheader.bits;
 			
@@ -549,6 +502,7 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
 		int widx = ridx xor 1;
 		
 		// sieve dispatch    
+    reset = false;
       for (unsigned i = 0; i < mSievePerRound; i++) {
         if(hashes.empty()){
           if (!reset) {
@@ -699,44 +653,6 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
 
 				/*printf("candi %d: hashid=%d index=%d origin=%d type=%d length=%d\n",
 						i, candi.hashid, candi.index, candi.origin, candi.type, chainlength);*/
-				if(chainlength >= block.minshare()){
-					
-					mpz_class sharemulti = hash.primorial * multi;
-					share.set_hash(hash.hash.GetHex());
-					share.set_merkle(work.merkle());
-					share.set_time(hash.time);
-					share.set_bits(work.bits());
-					share.set_nonce(hash.nonce);
-					share.set_multi(sharemulti.get_str(16));
-					share.set_height(block.height());
-					share.set_length(chainlength);
-					share.set_chaintype(candi.type);
-					share.set_isblock(isblock);
-					
-          LOG_F(1, "GPU %d found share: %d-ch type %d", mID, chainlength, candi.type+1);
-					if(isblock)
-            LOG_F(1, "GPU %d found BLOCK!", mID);
-					
-					Send(share, sharepush);
-					
-				}else if(chainlength < mDepth){
-          LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(chainorg.get_mpz_t(), 2), chainlength, mDepth);
-          LOG_F(WARNING, "origin: %s", chainorg.get_str().c_str());
-          LOG_F(WARNING, "type: %u", (unsigned)candi.type);
-          LOG_F(WARNING, "multiplier: %u", (unsigned)candi.index);
-          LOG_F(WARNING, "layer: %u", (unsigned)candi.origin);
-          LOG_F(WARNING, "hash primorial: %s", hash.primorial.get_str().c_str());
-          LOG_F(WARNING, "primorial multipliers: ");
-          for (unsigned i = 0; i < mPrimorial;) {
-            if (hash.primorial % gPrimes[i] == 0) {
-              hash.primorial /= gPrimes[i];
-              LOG_F(WARNING, " * [%u]%u", i+1, gPrimes[i]);
-            } else {
-              i++;
-            }
-          }
-					stats.errors++;
-				}
 			}
 		}
 
@@ -748,488 +664,9 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
 	
   LOG_F(INFO, "GPU %d stopped.", mID);
 
-	zmq_close(blocksub);
-	zmq_close(worksub);
-	zmq_close(statspush);
-	zmq_close(sharepush);
-	czmq_signal(pipe);
-}
-
-XPMClient::~XPMClient() {
-	
-	for(unsigned i = 0; i < mWorkers.size(); ++i)
-		if(mWorkers[i].first){
-			mWorkers[i].first->MakeExit = true;
-      if(czmq_poll(mWorkers[i].second, 8000))
-				delete mWorkers[i].first;
-		}
-
-	zmq_close(mBlockPub);
-	zmq_close(mWorkPub);
-	zmq_close(mStatsPull);
-}
-
-void XPMClient::dumpSieveConstants(unsigned weaveDepth,
-                                   unsigned threadsNum,
-                                   unsigned windowSize,
-                                   unsigned *primes,
-                                   std::ostream &file) 
-{
-  unsigned ranges[3] = {0, 0, 0};
-  for (unsigned i = 0; i < weaveDepth/threadsNum; i++) {
-    unsigned prime = primes[i*threadsNum];
-    if (ranges[0] == 0 && windowSize/prime <= 2)
-      ranges[0] = i;
-    if (ranges[1] == 0 && windowSize/prime <= 1)
-      ranges[1] = i;
-    if (ranges[2] == 0 && windowSize/prime == 0)
-      ranges[2] = i;
-  }
-
-  file << "#define SIEVERANGE1 " << ranges[0] << "\n";
-  file << "#define SIEVERANGE2 " << ranges[1] << "\n";
-  file << "#define SIEVERANGE3 " << ranges[2] << "\n";
-}
-
-bool XPMClient::Initialize(Configuration* cfg, bool benchmarkOnly, unsigned adjustedKernelTarget) {
-	_cfg = cfg;
-	
-	{
-		int np = sizeof(gPrimes)/sizeof(unsigned);
-		gPrimes2.resize(np*2);
-		for(int i = 0; i < np; ++i){
-			unsigned prime = gPrimes[i];
-			float fiprime = 1.f / float(prime);
-			gPrimes2[i*2] = prime;
-			memcpy(&gPrimes2[i*2+1], &fiprime, sizeof(float));
-		}
-	}
-
-  unsigned clKernelLSize = 1024;
-  unsigned clKernelLSizeLog2 = 10;
-
-  std::vector<CUDADeviceInfo> gpus;
-  {
-    int devicesNum = 0;
-    CUDA_SAFE_CALL(cuInit(0));
-    CUDA_SAFE_CALL(cuDeviceGetCount(&devicesNum));  
-    mNumDevices = devicesNum;
-  }
-  
-	int cpuload = cfg->lookupInt("", "cpuload", 1);
-	int depth = 5 - cpuload;
-	depth = std::max(depth, 2);
-	depth = std::min(depth, 5);
-	
-  onCrash = cfg->lookupString("", "onCrash", "");
-
-	unsigned clKernelTarget = adjustedKernelTarget ? adjustedKernelTarget : 10;
-	const char *targetValue = cfg->lookupString("", "target", "auto");
-	if (strcmp(targetValue, "auto") != 0) {
-		clKernelTarget = atoi(targetValue);
-		clKernelTargetAutoAdjust = false;
-	}
-
-	bool clKernelWidthAutoAdjust = true;
-	unsigned clKernelWidth = clKernelTarget*2;
-	const char *widthValue = cfg->lookupString("", "width", "auto");
-	if (strcmp(widthValue, "auto") != 0) {
-		clKernelWidthAutoAdjust = false;
-		clKernelWidth = atoi(widthValue);
-	}
-	
-  unsigned clKernelStripes = cfg->lookupInt("", "sieveSize", 420);
-  unsigned clKernelPCount = cfg->lookupInt("", "weaveDepth", 40960);
-  unsigned clKernelWindowSize = cfg->lookupInt("", "windowSize", 4096);
-
-	unsigned multiplierSizeLimits[3] = {26, 33, 36};
-	std::vector<bool> usegpu(mNumDevices, true);
-  std::vector<int> sievePerRound(mNumDevices, 5);
-	mCoreFreq = std::vector<int>(mNumDevices, -1);
-	mMemFreq = std::vector<int>(mNumDevices, -1);
-	mPowertune = std::vector<int>(mNumDevices, 42);
-  mFanSpeed = std::vector<int>(mNumDevices, 70);
-	
-	{
-		StringVector cmultiplierlimits;
-		StringVector cdevices;
-		StringVector csieveperround;
-		StringVector ccorespeed;
-		StringVector cmemspeed;
-		StringVector cpowertune;
-		StringVector cfanspeed;
-    
-		try {
-			cfg->lookupList("", "devices", cdevices);
-			cfg->lookupList("", "corefreq", ccorespeed);
-			cfg->lookupList("", "memfreq", cmemspeed);
-			cfg->lookupList("", "powertune", cpowertune);
-      cfg->lookupList("", "fanspeed", cfanspeed);
-			cfg->lookupList("", "multiplierLimits", cmultiplierlimits);
-      cfg->lookupList("", "sievePerRound", csieveperround);
-		}catch(const ConfigurationException& ex) {}
-
-		if (cmultiplierlimits.length() == 3) {
-			multiplierSizeLimits[0] = atoi(cmultiplierlimits[0]);
-			multiplierSizeLimits[1] = atoi(cmultiplierlimits[1]);
-			multiplierSizeLimits[2] = atoi(cmultiplierlimits[2]);
-		} else {
-      LOG_F(WARNING, "invalid multiplierLimits parameter in config, must be list of 3 numbers");
-		}
-		
-		for(int i = 0; i < (int)mNumDevices; ++i){
-			
-			if(i < cdevices.length())
-				usegpu[i] = !strcmp(cdevices[i], "1");
-			
-			if (i < csieveperround.length())
-				sievePerRound[i] = atoi(csieveperround[i]);
-			
-			if(i < ccorespeed.length())
-				mCoreFreq[i] = atoi(ccorespeed[i]);
-			
-			if(i < cmemspeed.length())
-				mMemFreq[i] = atoi(cmemspeed[i]);
-			
-			if(i < cpowertune.length())
-				mPowertune[i] = atoi(cpowertune[i]);
-			
-      if(i < cfanspeed.length())
-        mFanSpeed[i] = atoi(cfanspeed[i]);                        
-		}
-	}
-
-	for (unsigned i = 0; i < mNumDevices; i++) {
-		if (usegpu[i]) {
-			char name[128];
-			CUDADeviceInfo info;
-			mDeviceMap[i] = gpus.size();
-			mDeviceMapRev[gpus.size()] = i;
-			info.index = i;
-			CUDA_SAFE_CALL(cuDeviceGet(&info.device, i));
-			CUDA_SAFE_CALL(cuDeviceGetAttribute(&info.majorComputeCapability, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, info.device));
-			CUDA_SAFE_CALL(cuDeviceGetAttribute(&info.minorComputeCapability, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, info.device));
-			CUDA_SAFE_CALL(cuCtxCreate(&info.context, CU_CTX_SCHED_AUTO, info.device));
-			CUDA_SAFE_CALL(cuDeviceGetName(name, sizeof(name), info.device));
-			gpus.push_back(info);
-      LOG_F(INFO, "[%i] %s; Compute capability %i.%i", (int)gpus.size()-1, name, info.majorComputeCapability, info.minorComputeCapability);
-		} else {
-			mDeviceMap[i] = -1;
-		}
-	}
-	
-	// generate kernel configuration file
-  {
-    std::ofstream config("xpm/cuda/config.cu", std::fstream::trunc);
-    config << "#define STRIPES " << clKernelStripes << '\n';
-    config << "#define WIDTH " << clKernelWidth << '\n';
-    config << "#define PCOUNT " << clKernelPCount << '\n';
-    config << "#define TARGET " << clKernelTarget << '\n';
-    config << "#define SIZE " << clKernelWindowSize << '\n';
-    config << "#define LSIZE " << clKernelLSize << '\n';
-    config << "#define LSIZELOG2 " << clKernelLSizeLog2 << '\n';
-    config << "#define LIMIT13 " << multiplierSizeLimits[0] << '\n';
-    config << "#define LIMIT14 " << multiplierSizeLimits[1] << '\n';
-    config << "#define LIMIT15 " << multiplierSizeLimits[2] << '\n';    
-    dumpSieveConstants(clKernelPCount, clKernelLSize, clKernelWindowSize*32, gPrimes+13, config);
-  }
-  
-  std::string arguments = cfg->lookupString("", "compilerFlags", "");
-
-  std::vector<CUmodule> modules;
-	modules.resize(gpus.size());
-  for (unsigned i = 0; i < gpus.size(); i++) {
-		char kernelname[64];
-		char ccoption[64];
-		sprintf(kernelname, "kernelxpm_gpu%u.ptx", gpus[i].index);
-        sprintf(ccoption, "--gpu-architecture=compute_%i%i", gpus[i].majorComputeCapability, gpus[i].minorComputeCapability);
-    const char *options[] = { ccoption, arguments.c_str() };
-		CUDA_SAFE_CALL(cuCtxSetCurrent(gpus[i].context));
-    if (!cudaCompileKernel(kernelname,
-				{ "xpm/cuda/config.cu", "xpm/cuda/procs.cu", "xpm/cuda/fermat.cu", "xpm/cuda/sieve.cu", "xpm/cuda/sha256.cu", "xpm/cuda/benchmarks.cu"},
-				options,
-        arguments.empty() ? 1 : 2,
-				&modules[i],
-        gpus[i].majorComputeCapability,
-        gpus[i].minorComputeCapability,
-				adjustedKernelTarget != 0)) {
-			return false;
-		}
-  }
-  
-  if (benchmarkOnly) {   
-    for (unsigned i = 0; i < gpus.size(); i++) {
-      cudaRunBenchmarks(gpus[i].context, gpus[i].device, modules[i], depth, clKernelLSize);
-    }
-    
-    return false;
-  } else {
-    for(unsigned i = 0; i < gpus.size(); ++i) {
-      std::pair<PrimeMiner*,void*> worker;
-      PrimeMiner* miner = new PrimeMiner(i, gpus.size(), sievePerRound[i], depth, clKernelLSize);
-      miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
-      config_t config = miner->getConfig();
-			if ((!clKernelTargetAutoAdjust && config.TARGET != clKernelTarget) ||
-					(!clKernelWidthAutoAdjust && config.WIDTH != clKernelWidth) ||
-					config.PCOUNT != clKernelPCount ||
-					config.STRIPES != clKernelStripes ||
-					config.SIZE != clKernelWindowSize ||
-					config.LIMIT13 != multiplierSizeLimits[0] ||
-					config.LIMIT14 != multiplierSizeLimits[1] ||
-					config.LIMIT15 != multiplierSizeLimits[2]) {
-        LOG_F(ERROR, "Existing CUDA kernel (kernelxpm_gpu<N>.ptx) incompatible with configuration");
-        LOG_F(ERROR, "Please remove kernelxpm_gpu<N>.ptx file and restart miner");
-        exit(1);
-      }
-
-      void *pipe = czmq_thread_fork(mCtx, &PrimeMiner::InvokeMining, miner);
-      czmq_wait(pipe);
-      czmq_signal(pipe);
-      worker.first = miner;
-      worker.second = pipe;    
-      mWorkers.push_back(worker);
-    }
-  }
-	  
-	return true;
-}
-
-
-void XPMClient::NotifyBlock(const proto::Block& block) {
-	
-	SendPub(block, mBlockPub);
-	
-}
-
-
-bool XPMClient::TakeWork(const proto::Work& work) {
-	
-	const double TargetIncrease = 0.994;
-	const double TargetDecrease = 0.0061;
-	
-	SendPub(work, mWorkPub);
-	
-	if (!clKernelTargetAutoAdjust || work.bits() == 0)
-		return true;
-	double difficulty = GetPrimeDifficulty(work.bits());
-
-	bool needReset = false;
-	for(unsigned i = 0; i < mWorkers.size(); ++i) {
-		PrimeMiner *miner = mWorkers[i].first;
-		double target = miner->getConfig().TARGET;
-		if (difficulty > target && difficulty-target >= TargetIncrease) {
-      LOG_F(WARNING, "Target with high difficulty detected, need increase miner target");
-			needReset = true;
-			break;
-		} else if (difficulty < target && target-difficulty >= TargetDecrease) {
-      LOG_F(WARNING, "Target with low difficulty detected, need decrease miner target");
-			needReset = true;
-			break;
-		}
-	}
-	
-	if (needReset) {
-		unsigned newTarget = TargetGetLength(work.bits());
-		if (difficulty - newTarget >= TargetIncrease)
-			newTarget++;
-    LOG_F(WARNING, "Rebuild miner kernels, adjust target to %u..", newTarget);
-		// Stop and destroy all workers
-		for(unsigned i = 0; i < mWorkers.size(); ++i) {
-      LOG_F(WARNING, "attempt to stop GPU %u ...", i);
-			if(mWorkers[i].first){
-				mWorkers[i].first->MakeExit = true;
-        if(czmq_poll(mWorkers[i].second, 8000)) {
-					delete mWorkers[i].first;
-          zmq_close(mWorkers[i].second);
-        }
-			}
-		}
-		
-		mWorkers.clear();
-		
-		// Build new kernels with adjusted target
-		mPaused = true;
-		Initialize(_cfg, false, newTarget);
-    Toggle();
-		return false;
-	} else {
-		return true;
-	}
-}
-
-
-int XPMClient::GetStats(proto::ClientStats& stats) {
-	
-	unsigned nw = mWorkers.size();
-	std::vector<bool> running(nw);
-	std::vector<stats_t> wstats(nw);
-	
-	while (czmq_poll(mStatsPull, 0)) {
-		zmq_msg_t msg;
-		zmq_msg_init(&msg);
-		zmq_recvmsg(mStatsPull, &msg, 0);          
-		size_t fsize = zmq_msg_size(&msg);
-		uint8_t *fbytes = (uint8_t*)zmq_msg_data(&msg);
-		if(fsize >= sizeof(stats_t)) {
-			stats_t* tmp = (stats_t*)fbytes;
-			if(tmp->id < nw){
-				running[tmp->id] = true;
-				wstats[tmp->id] = *tmp;
-			}
-		}
-		
-		zmq_msg_close(&msg); 
-	}
-
-	double cpd = 0;
-	unsigned errors = 0;
-	int maxtemp = 0;
-	unsigned ngpus = 0;
-  int crashed = 0;
-  
-	for(unsigned i = 0; i < nw; ++i){
-		
-		int devid = mDeviceMapRev[i];
-		int temp = gpu_temp(devid);
-		int activity = gpu_activity(devid);
-		
-		if(temp > maxtemp)
-			maxtemp = temp;
-		
-		cpd += wstats[i].cpd;
-		errors += wstats[i].errors;
-		
-		if(running[i]){
-			ngpus++;
-      LOG_F(INFO, "[GPU %d] T=%dC A=%d%% E=%d primes=%f fermat=%d/sec cpd=%.2f/day",
-					i, temp, activity, wstats[i].errors, wstats[i].primeprob, wstats[i].fps, wstats[i].cpd);
-		}else if(!mWorkers[i].first)
-      LOG_F(ERROR, "[GPU %d] failed to start!\n", i);
-		else if(mPaused) {
-      LOG_F(INFO, "[GPU %d] paused", i);
-    } else {
-      crashed++;
-      LOG_F(ERROR, "[GPU %d] crashed!", i);
-    }
-		
-	}
-	
-  if (crashed && onCrash[0] != '\0') {
-    LOG_F(INFO, "Run command %s", onCrash);
-    loguru::flush();
-    system(onCrash);
-  }
-	
-	if(mStatCounter % 10 == 0)
-		for(unsigned i = 0; i < mNumDevices; ++i){
-			int gpuid = mDeviceMap[i];
-			if(gpuid >= 0)
-        LOG_F(INFO, "GPU %d: core=%dMHz mem=%dMHz powertune=%d fanspeed=%d",
-						gpuid, gpu_engineclock(i), gpu_memclock(i), gpu_powertune(i), gpu_fanspeed(i));
-		}
-	
-	stats.set_cpd(cpd);
-	stats.set_errors(errors);
-	stats.set_temp(maxtemp);
-	
-	mStatCounter++;
-	
-	return ngpus;
-	
 }
 
 int main() {
 	
-	unsigned nw = mWorkers.size();
-	std::vector<bool> running(nw);
-	std::vector<stats_t> wstats(nw);
 	
-	while (czmq_poll(mStatsPull, 0)) {
-		zmq_msg_t msg;
-		zmq_msg_init(&msg);
-		zmq_recvmsg(mStatsPull, &msg, 0);          
-		size_t fsize = zmq_msg_size(&msg);
-		uint8_t *fbytes = (uint8_t*)zmq_msg_data(&msg);
-		if(fsize >= sizeof(stats_t)) {
-			stats_t* tmp = (stats_t*)fbytes;
-			if(tmp->id < nw){
-				running[tmp->id] = true;
-				wstats[tmp->id] = *tmp;
-			}
-		}
-		
-		zmq_msg_close(&msg); 
-	}
-
-	double cpd = 0;
-	unsigned errors = 0;
-	int maxtemp = 0;
-	unsigned ngpus = 0;
-  int crashed = 0;
-  
-	for(unsigned i = 0; i < nw; ++i){
-		
-		int devid = mDeviceMapRev[i];
-		int temp = gpu_temp(devid);
-		int activity = gpu_activity(devid);
-		
-		if(temp > maxtemp)
-			maxtemp = temp;
-		
-		cpd += wstats[i].cpd;
-		errors += wstats[i].errors;
-		
-		if(running[i]){
-			ngpus++;
-      LOG_F(INFO, "[GPU %d] T=%dC A=%d%% E=%d primes=%f fermat=%d/sec cpd=%.2f/day",
-					i, temp, activity, wstats[i].errors, wstats[i].primeprob, wstats[i].fps, wstats[i].cpd);
-		}else if(!mWorkers[i].first)
-      LOG_F(ERROR, "[GPU %d] failed to start!\n", i);
-		else if(mPaused) {
-      LOG_F(INFO, "[GPU %d] paused", i);
-    } else {
-      crashed++;
-      LOG_F(ERROR, "[GPU %d] crashed!", i);
-    }
-		
-	}
-	
-  if (crashed && onCrash[0] != '\0') {
-    LOG_F(INFO, "Run command %s", onCrash);
-    loguru::flush();
-    system(onCrash);
-  }
-	
-	if(mStatCounter % 10 == 0)
-		for(unsigned i = 0; i < mNumDevices; ++i){
-			int gpuid = mDeviceMap[i];
-			if(gpuid >= 0)
-        LOG_F(INFO, "GPU %d: core=%dMHz mem=%dMHz powertune=%d fanspeed=%d",
-						gpuid, gpu_engineclock(i), gpu_memclock(i), gpu_powertune(i), gpu_fanspeed(i));
-		}
-	
-	stats.set_cpd(cpd);
-	stats.set_errors(errors);
-	stats.set_temp(maxtemp);
-	
-	mStatCounter++;
-	
-	return ngpus;
-	
-}
-
-
-void XPMClient::Toggle()
-{
-  for(unsigned i = 0; i < mWorkers.size(); ++i) {
-    if(mWorkers[i].first)
-      czmq_signal(mWorkers[i].second);
-  }
-
-  mPaused = !mPaused;
-}
-
-
-void XPMClient::setup_adl()
-{
 }
