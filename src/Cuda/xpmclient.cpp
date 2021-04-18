@@ -701,7 +701,7 @@ int main() {
 			memcpy(&gPrimes2[i*2+1], &fiprime, sizeof(float));
 		}
 	}
-  
+
   unsigned clKernelLSize = 1024;
   unsigned clKernelLSizeLog2 = 10;
 	std::vector<CUDADeviceInfo> gpus;
@@ -778,6 +778,14 @@ int main() {
   for (unsigned i = 0; i < gpus.size(); i++) {
     cudaRunBenchmarks(gpus[i].context, gpus[i].device, modules[i], depth, clKernelLSize);
   }
+
+      std::vector<PrimeMiner*> mWorkers;
+      unsigned int sievePerRound = 5;
+      for(unsigned i = 0; i < gpus.size(); ++i) {
+      PrimeMiner* miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
+      miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
+      mWorkers.push_back(miner);
+    }
 
   return 0;
 }

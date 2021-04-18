@@ -600,7 +600,6 @@ void cudaSieveTestBenchmark(CUfunction *kernels,
     CUDA_SAFE_CALL(primeBuf[i].init(mConfig.PCOUNT, true));
     CUDA_SAFE_CALL(primeBuf[i].copyToDevice(&gPrimes[mPrimorial+i+1]));
     CUDA_SAFE_CALL(primeBuf2[i].init(mConfig.PCOUNT*2, true));
-      i, maxHashPrimorial, mPrimorial, 2*(mPrimorial+i)+2, gPrimes2.size());
     CUDA_SAFE_CALL(primeBuf2[i].copyToDevice(&gPrimes2[2*(mPrimorial+i)+2]));
   }
   
