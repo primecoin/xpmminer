@@ -750,7 +750,7 @@ int main() {
     const char *options[] = { ccoption, arguments.c_str() };
 		CUDA_SAFE_CALL(cuCtxSetCurrent(gpus[i].context));
     if (!cudaCompileKernel(kernelname,
-				{ "xpm/cuda/config.cu", "xpm/cuda/procs.cu", "xpm/cuda/fermat.cu", "xpm/cuda/sieve.cu", "xpm/cuda/sha256.cu", "xpm/cuda/benchmarks.cu"},
+				{ "config.cu", "procs.cu", "fermat.cu", "sieve.cu", "sha256.cu", "benchmarks.cu"},
 				options,
         arguments.empty() ? 1 : 2,
 				&modules[i],
