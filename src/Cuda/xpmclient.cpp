@@ -667,6 +667,14 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
 }
 
 int main() {
-	
-	
+  unsigned clKernelLSize = 1024;
+  unsigned clKernelLSizeLog2 = 10;
+	std::vector<CUDADeviceInfo> gpus;
+  {
+    int devicesNum = 0;
+    CUDA_SAFE_CALL(cuInit(0));
+    CUDA_SAFE_CALL(cuDeviceGetCount(&devicesNum));
+    printf("number of devices %d\n", devicesNum);
+  }
+  return 0;
 }
