@@ -20,6 +20,7 @@
 #endif  
 
 #include <math.h>
+#include <map>
 
 std::vector<unsigned> gPrimes2;
 
@@ -670,11 +671,27 @@ int main() {
   unsigned clKernelLSize = 1024;
   unsigned clKernelLSizeLog2 = 10;
 	std::vector<CUDADeviceInfo> gpus;
-  {
-    int devicesNum = 0;
-    CUDA_SAFE_CALL(cuInit(0));
-    CUDA_SAFE_CALL(cuDeviceGetCount(&devicesNum));
-    printf("number of devices %d\n", devicesNum);
-  }
+  int devicesNum = 0;
+  CUDA_SAFE_CALL(cuInit(0));
+  CUDA_SAFE_CALL(cuDeviceGetCount(&devicesNum));
+  printf("number of devices %d\n", devicesNum);
+  std::map<int,int> mDeviceMap;
+  std::map<int,int> mDeviceMapRev;
+
+  for (unsigned i = 0; i < devicesNum; i++) {
+			char name[128];
+			CUDADeviceInfo info;
+			mDeviceMap[i] = gpus.size();
+			mDeviceMapRev[gpus.size()] = i;
+			info.index = i;
+			CUDA_SAFE_CALL(cuDeviceGet(&info.device, i));
+			CUDA_SAFE_CALL(cuDeviceGetAttribute(&info.majorComputeCapability, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, info.device));
+			CUDA_SAFE_CALL(cuDeviceGetAttribute(&info.minorComputeCapability, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, info.device));
+			CUDA_SAFE_CALL(cuCtxCreate(&info.context, CU_CTX_SCHED_AUTO, info.device));
+			CUDA_SAFE_CALL(cuDeviceGetName(name, sizeof(name), info.device));
+			gpus.push_back(info);
+      LOG_F(INFO, "[%i] %s; Compute capability %i.%i", (int)gpus.size()-1, name, info.majorComputeCapability, info.minorComputeCapability);
+	}
+
   return 0;
 }
