@@ -598,10 +598,11 @@ void cudaSieveTestBenchmark(CUfunction *kernels,
   LOG_F(INFO, " buffer\n");
   
   for (unsigned i = 0; i < maxHashPrimorial - mPrimorial; i++) {
-    LOG_F(INFO, " buffer2, %u, %u, %u\n", i, maxHashPrimorial, mPrimorial);
     CUDA_SAFE_CALL(primeBuf[i].init(mConfig.PCOUNT, true));
     CUDA_SAFE_CALL(primeBuf[i].copyToDevice(&gPrimes[mPrimorial+i+1]));
     CUDA_SAFE_CALL(primeBuf2[i].init(mConfig.PCOUNT*2, true));
+    LOG_F(INFO, " buffer2, %u, %u, %u, gPrimes2[%d] size %u\n", 
+      i, maxHashPrimorial, mPrimorial, 2*(mPrimorial+i)+2, gPrimes2.size());
     CUDA_SAFE_CALL(primeBuf2[i].copyToDevice(&gPrimes2[2*(mPrimorial+i)+2]));
     LOG_F(INFO, " buffer2 finished %u\n", i);
   }
