@@ -109,12 +109,6 @@ bool PrimeMiner::Initialize(CUcontext context, CUdevice device, CUmodule module)
   return true;
 }
 
-void PrimeMiner::InvokeMining(void *args, void *ctx, void *pipe) {
-	
-	((PrimeMiner*)args)->Mining(ctx, pipe);
-	
-}
-
 void PrimeMiner::FermatInit(pipeline_t &fermat, unsigned mfs)
 {
   fermat.current = 0;
@@ -222,10 +216,10 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
   }
 }
 
-void PrimeMiner::Mining(void *ctx, void *pipe) {
+void PrimeMiner::Mining() {
   cuCtxSetCurrent(_context);
   time_t starttime = time(0);
-	
+
 	stats_t stats;
 	stats.id = mID;
 	stats.errors = 0;
@@ -273,7 +267,7 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
     for(unsigned j = 0; j <= mPrimorial+i; j++)
       p *= gPrimes[j];    
     primorial[i] = p;
-  }  
+  }
   
 	{
 		unsigned primorialbits = mpz_sizeinbase(primorial[0].get_mpz_t(), 2);
@@ -324,12 +318,11 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
     }
     
     CUDA_SAFE_CALL(current.copyToDevice());
-  }    
+  }
 
 
 	bool run = true;
 	while(run){
-
 		{
 			time_t currtime = time(0);
 			time_t elapsed = currtime - time1;
@@ -355,7 +348,7 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
 			break;
 		
 		// reset if new work
-    bool reset = false;
+    bool reset = true;
 		if(reset){
       hashes.clear();
 			hashmod.count[0] = 0;
@@ -391,7 +384,7 @@ void PrimeMiner::Mining(void *ctx, void *pipe) {
 		
 		// hashmod fetch & dispatch
 		{
-// 			printf("got %d new hashes\n", hashmod.count[0]); fflush(stdout);
+ 			printf("got %d new hashes\n", hashmod.count[0]); fflush(stdout);
 			for(unsigned i = 0; i < hashmod.count[0]; ++i) {
 				hash_t hash;
 				hash.iter = iteration;
@@ -774,13 +767,12 @@ int main() {
     cudaRunBenchmarks(gpus[i].context, gpus[i].device, modules[i], depth, clKernelLSize);
   }
 
-      std::vector<PrimeMiner*> mWorkers;
-      unsigned int sievePerRound = 5;
-      for(unsigned i = 0; i < gpus.size(); ++i) {
+  unsigned int sievePerRound = 5;
+  for(unsigned i = 0; i < gpus.size(); ++i) {
       PrimeMiner* miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
       miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
-      mWorkers.push_back(miner);
-    }
+      miner->Mining();
+  }
 
   return 0;
 }
