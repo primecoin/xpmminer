@@ -322,7 +322,7 @@ void PrimeMiner::Mining() {
 
 
 	bool run = true;
-	while(run){
+	while(run) {
 		{
 			time_t currtime = time(0);
 			time_t elapsed = currtime - time1;
@@ -381,10 +381,11 @@ void PrimeMiner::Mining() {
       CUDA_SAFE_CALL(hashmod.midstate.copyToDevice(mHMFermatStream));
       CUDA_SAFE_CALL(hashmod.count.copyToDevice(mHMFermatStream));
 		}
-		
+
 		// hashmod fetch & dispatch
 		{
- 			printf("got %d new hashes\n", hashmod.count[0]); fflush(stdout);
+ 			printf("got %d new hashes\n", hashmod.count[0]);
+      fflush(stdout);
 			for(unsigned i = 0; i < hashmod.count[0]; ++i) {
 				hash_t hash;
 				hash.iter = iteration;
@@ -576,7 +577,7 @@ void PrimeMiner::Mining() {
 		int numcandis = final.count[0];
 		numcandis = std::min(numcandis, (int)final.info._size);
 		numcandis = std::max(numcandis, 0);
-//  		printf("got %d new candis\n", numcandis);
+    printf("got %d new candis\n", numcandis);
 		candis.resize(numcandis);
 		primeCount += numcandis;
 		if(numcandis)
@@ -591,9 +592,9 @@ void PrimeMiner::Mining() {
     // syncronize our stream one time per iteration
     // sieve stream is first because it much bigger
     CUDA_SAFE_CALL(cuEventSynchronize(sieveEvent)); 
-#ifdef __WINDOWS__  
+    #ifdef __WINDOWS__  
     CUDA_SAFE_CALL(cuCtxSynchronize());
-#endif
+    #endif
     for (unsigned i = 0; i < mSievePerRound; i++)
       CUDA_SAFE_CALL(candidatesCountBuffers[i][widx].copyToHost(mSieveStream));
     
@@ -619,7 +620,7 @@ void PrimeMiner::Mining() {
 		
 		// check candis
 		if(candis.size()){
-// 			printf("checking %d candis\n", (int)candis.size());
+  		printf("checking %d candis\n", (int)candis.size());
 			mpz_class chainorg;
 			mpz_class multi;
 			for(unsigned i = 0; i < candis.size(); ++i){
@@ -649,6 +650,7 @@ void PrimeMiner::Mining() {
 			break;
 		
 		iteration++;
+    break;
 	}
 	
   LOG_F(INFO, "GPU %d stopped.", mID);
