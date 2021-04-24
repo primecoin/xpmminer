@@ -225,11 +225,6 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
 void PrimeMiner::Mining(void *ctx, void *pipe) {
   cuCtxSetCurrent(_context);
   time_t starttime = time(0);
-	void* blocksub;
-	void* worksub;
-	void* statspush ;
-	void* sharepush ;  
-
 	
 	stats_t stats;
 	stats.id = mID;
