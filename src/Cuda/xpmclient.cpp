@@ -410,7 +410,8 @@ void PrimeMiner::Mining() {
 				block_t b = blockheader;
 				b.nonce = hash.nonce;
 				
-				SHA_256 sha;
+				printf("before hash\n");
+        SHA_256 sha;
 				sha.init();
 				sha.update((const unsigned char*)&b, sizeof(b));
 				sha.final((unsigned char*)&hash.hash);
