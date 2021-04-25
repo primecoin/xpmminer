@@ -13,8 +13,8 @@ include(CheckTypeSize)
 
 option(DEBUG_MINING_AMD_OPENCL "Print performance counters")
 option(BUILDCPUMINER "build CPU miner" ON)
-option(BUILDOPENCLMINER "build OpenCL" ON)
-option(BUILDCUDAMINER "build CUDA" ON)
+option(BUILDOPENCLMINER "build OpenCL miner" ON)
+option(BUILDCUDAMINER "build CUDA miner" ON)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
 
