@@ -398,13 +398,14 @@ void PrimeMiner::Mining() {
           if (primorialBitField & (1 << j))
             realPrimorial *= gPrimes[j];
         }
+        printf("tag1, %lu\n", realPrimorial);
 
         mpz_class mpzRealPrimorial;
-        mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);            
+        mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
         primorialIdx = std::max(mPrimorial, primorialIdx) - mPrimorial;
         mpz_class mpzHashMultiplier = primorial[primorialIdx] / mpzRealPrimorial;
-        unsigned hashMultiplierSize = mpz_sizeinbase(mpzHashMultiplier.get_mpz_t(), 2);      
-        mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);        
+        unsigned hashMultiplierSize = mpz_sizeinbase(mpzHashMultiplier.get_mpz_t(), 2);
+        mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
 				
 				block_t b = blockheader;
 				b.nonce = hash.nonce;
