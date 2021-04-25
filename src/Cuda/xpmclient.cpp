@@ -284,7 +284,7 @@ void PrimeMiner::Mining() {
   CUDA_SAFE_CALL(hashBuf.init(PW*mConfig.N, false));
 	
 	for(int sieveIdx = 0; sieveIdx < SW; ++sieveIdx) {
-    for(int instIdx = 0; instIdx < 2; ++instIdx){    
+    for(int instIdx = 0; instIdx < 2; ++instIdx){
       for (int pipelineIdx = 0; pipelineIdx < FERMAT_PIPELINES; pipelineIdx++)
         CUDA_SAFE_CALL(sieveBuffers[sieveIdx][pipelineIdx][instIdx].init(MSO, true));
       
@@ -348,7 +348,7 @@ void PrimeMiner::Mining() {
 			break;
 		
 		// reset if new work
-    bool reset = true;
+    bool reset = false;
 		if(reset){
       hashes.clear();
 			hashmod.count[0] = 0;
