@@ -395,7 +395,6 @@ void PrimeMiner::Mining() {
         uint32_t primorialIdx = 4;
         uint64_t realPrimorial = 1;
         for (unsigned j = 0; j < primorialIdx+1; j++) {
-          if (primorialBitField & (1 << j))
             realPrimorial *= gPrimes[j];
         }
         printf("tag1, %lu\n", realPrimorial);
@@ -410,11 +409,11 @@ void PrimeMiner::Mining() {
         printf("after divid %s\n", mpzHashMultiplier.get_str(10).c_str());
         unsigned hashMultiplierSize = mpz_sizeinbase(mpzHashMultiplier.get_mpz_t(), 2);
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
-				
+
 				block_t b = blockheader;
         for(unsigned int no = 1; no < 65535; ++no) {
           b.nonce = hash.nonce = no;
-          
+
           printf("before hash\n");
           SHA_256 sha;
           sha.init();
@@ -432,7 +431,7 @@ void PrimeMiner::Mining() {
             mpz_class mpzHash;
 				    mpz_set_uint256(mpzHash.get_mpz_t(), hash.hash);
             if(!mpz_divisible_p(mpzHash.get_mpz_t(), mpzRealPrimorial.get_mpz_t())){
-              LOG_F(WARNING, "mpz_divisible_ui_p failed.\n");
+              LOG_F(WARNING, "mpz_divisible_ui_p failed %d.\n", no);
 				      continue;
 				    } else {
               break;
