@@ -435,11 +435,11 @@ void PrimeMiner::Mining() {
 				
 				mpz_class mpzHash;
 				mpz_set_uint256(mpzHash.get_mpz_t(), hash.hash);
-        if(!mpz_divisible_p(mpzHash.get_mpz_t(), mpzRealPrimorial.get_mpz_t())){
-          LOG_F(WARNING, "mpz_divisible_ui_p failed.\n");
-					stats.errors++;
-					continue;
-				}
+        //if(!mpz_divisible_p(mpzHash.get_mpz_t(), mpzRealPrimorial.get_mpz_t())){
+        //  LOG_F(WARNING, "mpz_divisible_ui_p failed.\n");
+				//	stats.errors++;
+				//	continue;
+				//}
 				
 				hash.primorialIdx = primorialIdx;
         hash.primorial = mpzHashMultiplier;
