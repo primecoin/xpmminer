@@ -401,13 +401,13 @@ void PrimeMiner::Mining() {
         printf("tag1, %lu\n", realPrimorial);
 
         mpz_class mpzRealPrimorial;
-        print("to import 1\n");
+        printf("to import 1\n");
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
-        print("import 1, %s\n", mpzRealPrimorial.get_str(10).c_str());
+        printf("import 1, %s\n", mpzRealPrimorial.get_str(10).c_str());
         primorialIdx = std::max(mPrimorial, primorialIdx) - mPrimorial;
-        print("to divid\n");
+        printf("to divid\n");
         mpz_class mpzHashMultiplier = primorial[primorialIdx] / mpzRealPrimorial;
-        print("after divid %s\n", mpzHashMultiplier.get_str(10).c_str());
+        printf("after divid %s\n", mpzHashMultiplier.get_str(10).c_str());
         unsigned hashMultiplierSize = mpz_sizeinbase(mpzHashMultiplier.get_mpz_t(), 2);
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
 				
