@@ -412,23 +412,26 @@ void PrimeMiner::Mining() {
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
 				
 				block_t b = blockheader;
-				b.nonce = hash.nonce;
-				
-				printf("before hash\n");
-        SHA_256 sha;
-				sha.init();
-				sha.update((const unsigned char*)&b, sizeof(b));
-				sha.final((unsigned char*)&hash.hash);
-				sha.init();
-				sha.update((const unsigned char*)&hash.hash, sizeof(uint256));
-				sha.final((unsigned char*)&hash.hash);
-				
-				printf("hash %d\n", hash.hash < (uint256(1) << 255));
-        if(hash.hash < (uint256(1) << 255)){
-          LOG_F(WARNING, "hash does not meet minimum.\n");
-					stats.errors++;
-					continue;
-				}
+        for(unsigned int no = 1; no < 65535; ++no) {
+          b.nonce = hash.nonce = no;
+          
+          printf("before hash\n");
+          SHA_256 sha;
+          sha.init();
+          sha.update((const unsigned char*)&b, sizeof(b));
+          sha.final((unsigned char*)&hash.hash);
+          sha.init();
+          sha.update((const unsigned char*)&hash.hash, sizeof(uint256));
+          sha.final((unsigned char*)&hash.hash);
+          
+          printf("hash %d\n", hash.hash < (uint256(1) << 255));
+          if(hash.hash < (uint256(1) << 255)){
+            LOG_F(WARNING, "hash does not meet minimum, %u.\n", no);
+            continue;
+          } else {
+            break;
+          }
+        }
 				
 				mpz_class mpzHash;
 				mpz_set_uint256(mpzHash.get_mpz_t(), hash.hash);
