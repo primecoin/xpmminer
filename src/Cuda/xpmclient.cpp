@@ -386,7 +386,7 @@ void PrimeMiner::Mining() {
 		{
  			printf("got %d new hashes\n", hashmod.count[0]);
       fflush(stdout);
-			for(unsigned i = 0; i < hashmod.count[0]; ++i) {
+			for(unsigned i = 0; i < 1; ++i) {
 				hash_t hash;
 				hash.iter = iteration;
 				hash.time = blockheader.time;
@@ -397,9 +397,9 @@ void PrimeMiner::Mining() {
         for (unsigned j = 0; j < primorialIdx+1; j++) {
           if (primorialBitField & (1 << j))
             realPrimorial *= gPrimes[j];
-        }      
-        
-        mpz_class mpzRealPrimorial;        
+        }
+
+        mpz_class mpzRealPrimorial;
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);            
         primorialIdx = std::max(mPrimorial, primorialIdx) - mPrimorial;
         mpz_class mpzHashMultiplier = primorial[primorialIdx] / mpzRealPrimorial;
