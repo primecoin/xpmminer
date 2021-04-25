@@ -446,7 +446,7 @@ void PrimeMiner::Mining() {
 					stats.errors++;
 					continue;
 				} else {
-          printf("%s % %s succeed\n", mpzHash.get_str(10).c_str(), mpzRealPrimorial.get_str(10).c_str());
+          printf("%s mod %s succeed\n", mpzHash.get_str(10).c_str(), mpzRealPrimorial.get_str(10).c_str());
         }
 				
 				hash.primorialIdx = primorialIdx;
