@@ -258,7 +258,7 @@ void PrimeMiner::Mining() {
   CUevent sieveEvent;
   CUDA_SAFE_CALL(cuEventCreate(&sieveEvent, CU_EVENT_BLOCKING_SYNC));
   
-  for (unsigned i = 0; i < maxHashPrimorial - mPrimorial; i++) {
+  for (unsigned i = 0; i < maxHashPrimorial; i++) {
     CUDA_SAFE_CALL(primeBuf[i].init(mConfig.PCOUNT, true));
     CUDA_SAFE_CALL(primeBuf[i].copyToDevice(&gPrimes[mPrimorial+i+1]));
     CUDA_SAFE_CALL(primeBuf2[i].init(mConfig.PCOUNT*2, true));
@@ -403,7 +403,7 @@ void PrimeMiner::Mining() {
         printf("to import 1\n");
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
         printf("import 1, (%d,%d), %s\n", mPrimorial, primorialIdx, mpzRealPrimorial.get_str(10).c_str());
-        primorialIdx = 15;
+        primorialIdx = 4;
         printf("to divid %u, [%u]\n", maxHashPrimorial, primorialIdx);
         mpz_class mpzHashMultiplier = primorial[primorialIdx];
         printf("after divid %s\n", mpzHashMultiplier.get_str(10).c_str());
@@ -414,7 +414,7 @@ void PrimeMiner::Mining() {
         for(unsigned int no = 1; no < 65535; ++no) {
           b.nonce = hash.nonce = no;
 
-          printf("before hash\n");
+          //printf("before hash\n");
           SHA_256 sha;
           sha.init();
           sha.update((const unsigned char*)&b, sizeof(b));
@@ -423,15 +423,15 @@ void PrimeMiner::Mining() {
           sha.update((const unsigned char*)&hash.hash, sizeof(uint256));
           sha.final((unsigned char*)&hash.hash);
           
-          printf("hash %d\n", hash.hash < (uint256(1) << 255));
+          //printf("hash %d\n", hash.hash < (uint256(1) << 255));
           if(hash.hash < (uint256(1) << 255)){
-            LOG_F(WARNING, "hash does not meet minimum, %u.\n", no);
+            //LOG_F(WARNING, "hash does not meet minimum, %u.\n", no);
             continue;
           } else {
             mpz_class mpzHash;
 				    mpz_set_uint256(mpzHash.get_mpz_t(), hash.hash);
             if(!mpz_divisible_p(mpzHash.get_mpz_t(), mpzRealPrimorial.get_mpz_t())){
-              LOG_F(WARNING, "mpz_divisible_ui_p failed %d.\n", no);
+              //LOG_F(WARNING, "mpz_divisible_ui_p failed %d.\n", no);
 				      continue;
 				    } else {
               break;
