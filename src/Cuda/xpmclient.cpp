@@ -348,7 +348,7 @@ void PrimeMiner::Mining() {
 			break;
 		
 		// reset if new work
-    bool reset = false;
+    bool reset = true;
 		if(reset){
       hashes.clear();
 			hashmod.count[0] = 0;
@@ -368,16 +368,16 @@ void PrimeMiner::Mining() {
       }
 
 			blockheader.version = block_t::CURRENT_VERSION;
-			//blockheader.hashPrevBlock.SetHex(block.hash());
-			//blockheader.hashMerkleRoot.SetHex(work.merkle());
-			//blockheader.time = work.time() + mID;
-			//blockheader.bits = work.bits();
+			blockheader.hashPrevBlock.SetHex("871e5e84001d96cf9da8b9f93b74a4150f5fc9f86122822b60786476d5585392");
+			blockheader.hashMerkleRoot.SetHex("0114b9b25a384485a756541a1c65f4827148f83547a3eb964fa06ceb950d3cb1");
+			blockheader.time = 1619348903;
+			blockheader.bits = 0x0ad96159;
 			blockheader.nonce = 1;
 			testParams.nBits = blockheader.bits;
 			
 			unsigned target = TargetGetLength(blockheader.bits);
       precalcSHA256(&blockheader, hashmod.midstate._hostData, &precalcData);
-      hashmod.count[0] = 0;
+      hashmod.count[0] = 1;
       CUDA_SAFE_CALL(hashmod.midstate.copyToDevice(mHMFermatStream));
       CUDA_SAFE_CALL(hashmod.count.copyToDevice(mHMFermatStream));
 		}
