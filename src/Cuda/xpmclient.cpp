@@ -429,17 +429,24 @@ void PrimeMiner::Mining() {
             LOG_F(WARNING, "hash does not meet minimum, %u.\n", no);
             continue;
           } else {
-            break;
+            mpz_class mpzHash;
+				    mpz_set_uint256(mpzHash.get_mpz_t(), hash.hash);
+            if(!mpz_divisible_p(mpzHash.get_mpz_t(), mpzRealPrimorial.get_mpz_t())){
+              LOG_F(WARNING, "mpz_divisible_ui_p failed.\n");
+				      continue;
+				    } else {
+              break;
+            }
           }
         }
 				
 				mpz_class mpzHash;
 				mpz_set_uint256(mpzHash.get_mpz_t(), hash.hash);
-        //if(!mpz_divisible_p(mpzHash.get_mpz_t(), mpzRealPrimorial.get_mpz_t())){
-        //  LOG_F(WARNING, "mpz_divisible_ui_p failed.\n");
-				//	stats.errors++;
-				//	continue;
-				//}
+        if(!mpz_divisible_p(mpzHash.get_mpz_t(), mpzRealPrimorial.get_mpz_t())){
+          LOG_F(WARNING, "mpz_divisible_ui_p failed.\n");
+					stats.errors++;
+					continue;
+				}
 				
 				hash.primorialIdx = primorialIdx;
         hash.primorial = mpzHashMultiplier;
