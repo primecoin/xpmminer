@@ -445,7 +445,9 @@ void PrimeMiner::Mining() {
           LOG_F(WARNING, "mpz_divisible_ui_p failed.\n");
 					stats.errors++;
 					continue;
-				}
+				} else {
+          printf("%s % %s succeed\n", mpzHash.get_str(10).c_str(), mpzRealPrimorial.get_str(10).c_str());
+        }
 				
 				hash.primorialIdx = primorialIdx;
         hash.primorial = mpzHashMultiplier;
