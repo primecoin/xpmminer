@@ -392,7 +392,7 @@ void PrimeMiner::Mining() {
 				hash.time = blockheader.time;
 				hash.nonce = hashmod.found[i];
         uint32_t primorialBitField = hashmod.primorialBitField[i];
-        uint32_t primorialIdx = primorialBitField >> 16;
+        uint32_t primorialIdx = 4;
         uint64_t realPrimorial = 1;
         for (unsigned j = 0; j < primorialIdx+1; j++) {
           if (primorialBitField & (1 << j))
