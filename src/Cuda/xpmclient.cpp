@@ -417,7 +417,8 @@ void PrimeMiner::Mining() {
 				sha.update((const unsigned char*)&hash.hash, sizeof(uint256));
 				sha.final((unsigned char*)&hash.hash);
 				
-				if(hash.hash < (uint256(1) << 255)){
+				printf("hash %d\n", hash.hash < (uint256(1) << 255));
+        if(hash.hash < (uint256(1) << 255)){
           LOG_F(WARNING, "hash does not meet minimum.\n");
 					stats.errors++;
 					continue;
