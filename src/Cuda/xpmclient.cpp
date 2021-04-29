@@ -406,11 +406,11 @@ void PrimeMiner::Mining() {
         primorialIdx = 4;
         mpz_class mpzHashMultiplier = primorial[primorialIdx];
         printf("to divid primorial[%u<=%u] = %s\n", primorialIdx, maxHashPrimorial, mpzHashMultiplier.get_str(10).c_str());
-        printf("after divid %s\n", mpzHashMultiplier.get_str(10).c_str());
         unsigned hashMultiplierSize = mpz_sizeinbase(mpzHashMultiplier.get_mpz_t(), 2);
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
 
 				block_t b = blockheader;
+        printf("mpzRealPrimorial %s\n", mpzRealPrimorial.get_str(10).c_str());
         for(unsigned int no = 1; no < 65535; ++no) {
           b.nonce = hash.nonce = no;
 
