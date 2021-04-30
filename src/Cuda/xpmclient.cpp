@@ -457,16 +457,16 @@ void PrimeMiner::Mining() {
         memset(&hashBuf[hid*mConfig.N], 0, sizeof(uint32_t)*mConfig.N);
         mpz_export(&hashBuf[hid*mConfig.N], 0, -1, 4, 0, 0, hashes.get(hid).shash.get_mpz_t());        
 			}
-			
+
 			if (hashmod.count[0])
         CUDA_SAFE_CALL(hashBuf.copyToDevice(mSieveStream));
-			
-			//printf("hashlist.size() = %d\n", (int)hashlist.size());
+
 			hashmod.count[0] = 0;
 			
       int numhash = ((int)(16*mSievePerRound) - (int)hashes.remaining()) * numHashCoeff;
 
-			if(numhash > 0){
+			printf("numhash is %d, mLSize %u\n", numhash, mLSize);
+      if(numhash > 0){
         numhash += mLSize - numhash % mLSize;
 				if(blockheader.nonce > (1u << 31)){
 					blockheader.time += mThreads;
