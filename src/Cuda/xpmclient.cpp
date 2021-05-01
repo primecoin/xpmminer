@@ -406,6 +406,7 @@ void PrimeMiner::Mining() {
         uint32_t primorialIdx = primorialBitField >> 16;
         uint64_t realPrimorial = 1;
         for (unsigned j = 0; j < primorialIdx+1; j++) {
+          if (primorialBitField & (1 << j))
             realPrimorial *= gPrimes[j];
         }
         printf("tag1, %lu\n", realPrimorial);
@@ -414,16 +415,14 @@ void PrimeMiner::Mining() {
         printf("to import 1\n");
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
         printf("import 1, (%d,%d), %s\n", mPrimorial, primorialIdx, mpzRealPrimorial.get_str(10).c_str());
-        primorialIdx = 4;
-        mpz_class mpzHashMultiplier = primorial[primorialIdx];
+        primorialIdx = std::max(mPrimorial, primorialIdx) - mPrimorial;
+        mpz_class mpzHashMultiplier = primorial[primorialIdx] / mpzRealPrimorial;
         printf("to divid primorial[%u<=%u] = %s\n", primorialIdx, maxHashPrimorial, mpzHashMultiplier.get_str(10).c_str());
         unsigned hashMultiplierSize = mpz_sizeinbase(mpzHashMultiplier.get_mpz_t(), 2);
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
 
 				block_t b = blockheader;
-        printf("mpzRealPrimorial %s\n", mpzRealPrimorial.get_str(10).c_str());
-        for(unsigned int no = 1; no < 65535; ++no) {
-          b.nonce = hash.nonce = no;
+          b.nonce = hash.nonce;
 
           //printf("before hash\n");
           SHA_256 sha;
@@ -435,20 +434,11 @@ void PrimeMiner::Mining() {
           sha.final((unsigned char*)&hash.hash);
           
           //printf("hash %d\n", hash.hash < (uint256(1) << 255));
-          if(hash.hash < (uint256(1) << 255)){
-            //LOG_F(WARNING, "hash does not meet minimum, %u.\n", no);
-            continue;
-          } else {
-            mpz_class mpzHash;
-				    mpz_set_uint256(mpzHash.get_mpz_t(), hash.hash);
-            if(!mpz_divisible_p(mpzHash.get_mpz_t(), mpzRealPrimorial.get_mpz_t())){
-              //LOG_F(WARNING, "mpz_divisible_ui_p failed %d.\n", no);
-				      continue;
-				    } else {
-              break;
-            }
-          }
-        }
+				if(hash.hash < (uint256(1) << 255)){
+          LOG_F(WARNING, "hash does not meet minimum.\n");
+					stats.errors++;
+					continue;
+				}
 				
 				mpz_class mpzHash;
 				mpz_set_uint256(mpzHash.get_mpz_t(), hash.hash);
@@ -456,9 +446,7 @@ void PrimeMiner::Mining() {
           LOG_F(WARNING, "mpz_divisible_ui_p failed.\n");
 					stats.errors++;
 					continue;
-				} else {
-          printf("%s mod %s succeed\n", mpzHash.get_str(10).c_str(), mpzRealPrimorial.get_str(10).c_str());
-        }
+				}
 				
 				hash.primorialIdx = primorialIdx;
         hash.primorial = mpzHashMultiplier;
@@ -704,7 +692,6 @@ void PrimeMiner::Mining() {
 			break;
 		
 		iteration++;
-    break;
 	}
 	
   LOG_F(INFO, "GPU %d stopped.", mID);
