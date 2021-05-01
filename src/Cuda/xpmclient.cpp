@@ -258,7 +258,7 @@ void PrimeMiner::Mining() {
   CUevent sieveEvent;
   CUDA_SAFE_CALL(cuEventCreate(&sieveEvent, CU_EVENT_BLOCKING_SYNC));
   
-  for (unsigned i = 0; i < maxHashPrimorial; i++) {
+  for (unsigned i = 0; i < maxHashPrimorial - mPrimorial; i++) {
     CUDA_SAFE_CALL(primeBuf[i].init(mConfig.PCOUNT, true));
     CUDA_SAFE_CALL(primeBuf[i].copyToDevice(&gPrimes[mPrimorial+i+1]));
     CUDA_SAFE_CALL(primeBuf2[i].init(mConfig.PCOUNT*2, true));
@@ -321,6 +321,7 @@ void PrimeMiner::Mining() {
   }
 
 
+        int loadworkaccount = 0;
 	bool run = true;
 	while(run) {
 		{
@@ -343,12 +344,22 @@ void PrimeMiner::Mining() {
 		stats.cpd = 24.*3600. * double(stats.fps) * pow(stats.primeprob, mConfig.TARGET);
 		
 		// get work
-
+		bool reset = false;
+		{
+			bool getwork = true;
+			while(getwork && run){
+        if(loadworkaccount==0){
+          run = true;//ReceivePub(work, worksub);
+					reset = true;
+          loadworkaccount = 1;
+				}
+				getwork = false;
+			}
+		}
 		if(!run)
 			break;
 		
 		// reset if new work
-    bool reset = true;
 		if(reset){
       hashes.clear();
 			hashmod.count[0] = 0;
@@ -377,7 +388,7 @@ void PrimeMiner::Mining() {
 			
 			unsigned target = TargetGetLength(blockheader.bits);
       precalcSHA256(&blockheader, hashmod.midstate._hostData, &precalcData);
-      hashmod.count[0] = 1;
+      hashmod.count[0] = 0;
       CUDA_SAFE_CALL(hashmod.midstate.copyToDevice(mHMFermatStream));
       CUDA_SAFE_CALL(hashmod.count.copyToDevice(mHMFermatStream));
 		}
@@ -386,13 +397,13 @@ void PrimeMiner::Mining() {
 		{
  			printf("got %d new hashes\n", hashmod.count[0]);
       fflush(stdout);
-			for(unsigned i = 0; i < 1; ++i) {
+			for(unsigned i = 0; i < hashmod.count[0]; ++i) {
 				hash_t hash;
 				hash.iter = iteration;
 				hash.time = blockheader.time;
 				hash.nonce = hashmod.found[i];
         uint32_t primorialBitField = hashmod.primorialBitField[i];
-        uint32_t primorialIdx = 4;
+        uint32_t primorialIdx = primorialBitField >> 16;
         uint64_t realPrimorial = 1;
         for (unsigned j = 0; j < primorialIdx+1; j++) {
             realPrimorial *= gPrimes[j];
@@ -510,7 +521,6 @@ void PrimeMiner::Mining() {
 		int widx = ridx xor 1;
 		
 		// sieve dispatch    
-    reset = false;
       for (unsigned i = 0; i < mSievePerRound; i++) {
         if(hashes.empty()){
           if (!reset) {
@@ -566,8 +576,8 @@ void PrimeMiner::Mining() {
                                         mLSize, 1, 1,
                                         0, mSieveStream, arguments, 0));          
           
-        }         
-         
+        }
+
 				{
           uint32_t multiplierSize = mpz_sizeinbase(hashes.get(hid).shash.get_mpz_t(), 2);
           void *arguments[] = {
@@ -661,6 +671,32 @@ void PrimeMiner::Mining() {
 
 				/*printf("candi %d: hashid=%d index=%d origin=%d type=%d length=%d\n",
 						i, candi.hashid, candi.index, candi.origin, candi.type, chainlength);*/
+				if(chainlength >= 0){
+					
+					mpz_class sharemulti = hash.primorial * multi;
+					
+          LOG_F(1, "GPU %d found share: %d-ch type %d", mID, chainlength, candi.type+1);
+					if(isblock)
+            LOG_F(1, "GPU %d found BLOCK!", mID);
+					
+				}else if(chainlength < mDepth){
+          LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(chainorg.get_mpz_t(), 2), chainlength, mDepth);
+          LOG_F(WARNING, "origin: %s", chainorg.get_str().c_str());
+          LOG_F(WARNING, "type: %u", (unsigned)candi.type);
+          LOG_F(WARNING, "multiplier: %u", (unsigned)candi.index);
+          LOG_F(WARNING, "layer: %u", (unsigned)candi.origin);
+          LOG_F(WARNING, "hash primorial: %s", hash.primorial.get_str().c_str());
+          LOG_F(WARNING, "primorial multipliers: ");
+          for (unsigned i = 0; i < mPrimorial;) {
+            if (hash.primorial % gPrimes[i] == 0) {
+              hash.primorial /= gPrimes[i];
+              LOG_F(WARNING, " * [%u]%u", i+1, gPrimes[i]);
+            } else {
+              i++;
+            }
+          }
+					stats.errors++;
+				}
 			}
 		}
 
