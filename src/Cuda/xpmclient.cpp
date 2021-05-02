@@ -651,6 +651,7 @@ void PrimeMiner::Mining() {
 				multi = candi.index;
 				multi <<= candi.origin;
 				chainorg = hash.shash;
+        printf("origin = %s\n", chainorg.get_str(10).c_str());
 				chainorg *= multi;
 				
 				testParams.nCandidateType = candi.type;
