@@ -8,9 +8,9 @@
 
 
 #include "xpmclient.h"
-#include "prime.h"
+#include "primecoin.h"
 #include "benchmarks.h"
-
+#include <getopt.h>
 #include <fstream>
 #include <set>
 #include <memory>
@@ -18,9 +18,23 @@
 #if defined(__GXX_EXPERIMENTAL_CXX0X__) && (__cplusplus < 201103L)
 #define steady_clock monotonic_clock
 #endif  
-
+#include "getblocktemplate.h"
 #include <math.h>
 #include <map>
+#include "prime.h"
+#include <ncurses.h>
+unsigned gDebug = 0;
+int gExtensionsNum = 9;
+int gPrimorial = 19;
+int gSieveSize = 10;
+int gWeaveDepth = 8192;
+int gThreadsNum = 1;
+int extraNonce = 0;
+
+static const char *gWallet = 0;
+static const char *gUrl = "127.0.0.1:9912";
+static const char *gUserName = 0;
+static const char *gPassword = 0;
 
 std::vector<unsigned> gPrimes2;
 
@@ -248,7 +262,7 @@ void PrimeMiner::Mining() {
   cudaBuffer<uint32_t> candidatesCountBuffers[SW][2];
   pipeline_t fermat320;
   pipeline_t fermat352;
-	CPrimalityTestParams testParams;
+	CPrimalityTestParams testParams(bitsFromDifficulty(10));
 	std::vector<fermat_t> candis;
   unsigned numHashCoeff = 32768;
 
@@ -384,7 +398,7 @@ void PrimeMiner::Mining() {
 			blockheader.time = 1619348903;
 			blockheader.bits = 0x0ad96159;
 			blockheader.nonce = 1;
-			testParams.nBits = blockheader.bits;
+			testParams.bits = blockheader.bits;
 			
 			unsigned target = TargetGetLength(blockheader.bits);
       precalcSHA256(&blockheader, hashmod.midstate._hostData, &precalcData);
@@ -654,9 +668,9 @@ void PrimeMiner::Mining() {
         printf("origin = %s\n", chainorg.get_str(10).c_str());
 				chainorg *= multi;
 				
-				testParams.nCandidateType = candi.type;
-        bool isblock = ProbablePrimeChainTestFast(chainorg, testParams, mDepth);
-				unsigned chainlength = TargetGetLength(testParams.nChainLength);
+				testParams.candidateType = candi.type;
+        bool isblock = ProbablePrimeChainTestFast(chainorg, testParams);
+				unsigned chainlength = TargetGetLength(testParams.chainLength);
 
 				/*printf("candi %d: hashid=%d index=%d origin=%d type=%d length=%d\n",
 						i, candi.hashid, candi.index, candi.origin, candi.type, chainlength);*/
@@ -722,7 +736,136 @@ void dumpSieveConstants(unsigned weaveDepth,
   file << "#define SIEVERANGE3 " << ranges[2] << "\n";
 }
 
-int main() {
+
+
+enum CmdLineOptions {
+  clDebug = 0,
+  clThreadsNum,
+  clBenchmark,
+  clExtensionsNum,
+  clPrimorial,
+  clSieveSize,
+  clWeaveDepth,
+  clUrl,
+  clUser,
+  clPass,
+  clWallet,
+  clWorkerId,
+  clHelp,
+  clOptionLast,
+  clOptionsNum
+};
+
+void printHelpMessage() 
+{
+  printf("Opensource primecoin CPU miner, usage:\n");
+  printf("  xpmclminer <arguments>\n\n");
+  printf("  -h or --help: show this help message\n");
+  printf("  -b or --benchmark: run benchmark and exit\n");
+  printf("  -o or --url <HostAddress:port>: address of primecoin RPC client, default: %s\n", gUrl);
+  printf("  -u or --user <UserName>: user name for primecoin RPC client\n");
+  printf("  -p or --pass <Password>: password for primecoin RPC client\n");
+  printf("  -w or --wallet: wallet address for coin receiving\n");
+  printf("  --debug: show additional mining information\n");
+  printf("  --extensions-num <number>: Eratosthenes sieve extensions number (default: %u)\n", gExtensionsNum);
+  printf("  --primorial <number>: primorial number (default: %u)\n", gPrimorial);
+  printf("  --sieve-size <number>: Eratosthenes sieve size (default: %u)\n", gSieveSize);
+  printf("  --weave-depth <number>: Eratosthenes sieve weave depth (default: %u)\n", gWeaveDepth);
+  printf("  --worker-id: unique identifier of your worker, used in block creation. ");
+  printf("All your rigs must have different worker IDs! (default: current time value)\n");
+}
+
+void initCmdLineOptions(option *options)
+{
+  options[clDebug] = {"debug", no_argument, 0, 0};
+  options[clThreadsNum] = {"threads", required_argument, &gThreadsNum, 0};
+  options[clBenchmark] = {"benchmark", no_argument, 0, 'b'};
+  options[clExtensionsNum] = {"extensions-num", required_argument, &gExtensionsNum, 0};  
+  options[clPrimorial] = {"primorial", required_argument, &gPrimorial, 0};
+  options[clSieveSize] = {"sieve-size", required_argument, &gSieveSize, 0};
+  options[clWeaveDepth] = {"weave-depth", required_argument, &gWeaveDepth, 0};
+  options[clUrl] = {"url", required_argument, 0, 'o'};
+  options[clUser] = {"user", required_argument, 0, 'u'};
+  options[clPass] = {"pass", required_argument, 0, 'p'};
+  options[clWallet] = {"wallet", required_argument, 0, 'w'};
+  options[clWorkerId] = {"worker-id", required_argument, &extraNonce, 0};  
+  options[clHelp] = {"help", no_argument, 0, 'h'};
+  options[clOptionLast] = {0, 0, 0, 0};
+}
+
+int main(int argc, char **argv) {
+  option gOptions[clOptionsNum];
+  bool isBenchmark = false;
+  int index = 0, c;
+  initCmdLineOptions(gOptions);
+  const char *platform = "NVIDIA CUDA";
+  while ((c = getopt_long(argc, argv, "bo:u:p:w:h", gOptions, &index)) != -1) {
+    switch (c) {
+      case 0 :
+        switch (index) {
+          case clDebug :
+            gDebug = 1;
+            break;
+          case clExtensionsNum :
+            gExtensionsNum = atoi(optarg);
+            break;
+          case clPrimorial :
+            gPrimorial = atoi(optarg);
+            break;
+          case clThreadsNum :
+            gThreadsNum = atoi(optarg);
+            break;
+          case clWorkerId :
+            extraNonce = atoi(optarg);
+            break;            
+        }
+        break;
+          case 'b' :
+            isBenchmark = true;
+            break;
+          case 'o' :
+            gUrl = optarg;
+            break;
+          case 'u' :
+            gUserName = optarg;
+            break;
+          case 'p' :
+            gPassword = optarg;
+            break;
+          case 'w' :
+            gWallet = optarg;
+            break;
+          case 'h' :
+            printHelpMessage();
+            exit(0);
+          case ':' :
+            fprintf(stderr, "Error: option %s missing argument\n",
+                    gOptions[index].name);
+            break;
+          case '?' :
+            fprintf(stderr, "Error: invalid option %s\n", argv[optind-1]);
+            break;
+          default :
+            break;
+    }
+  }
+  
+  if ((!gUserName || !gPassword) && !isBenchmark) {
+    fprintf(stderr, "Error: you must specify user name and password\n");
+    exit(1);
+  }
+  
+  if (!gWallet && !isBenchmark) {
+    fprintf(stderr, "Error: you must specify wallet\n");
+    exit(1);
+  }
+  WINDOW *display = initscr();
+  WINDOW *log = newwin(30, 160, 3 + gThreadsNum + 12, 0);
+  scrollok(log, TRUE); 
+  GetBlockTemplateContext ctx(log, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
+  SubmitContext *submit = new SubmitContext(log, gUrl, gUserName, gPassword);;
+
+
 
   {
 		int np = sizeof(gPrimes)/sizeof(unsigned);
