@@ -660,6 +660,7 @@ void PrimeMiner::Mining() {
 				/*printf("candi %d: hashid=%d index=%d origin=%d type=%d length=%d\n",
 						i, candi.hashid, candi.index, candi.origin, candi.type, chainlength);*/
 				if(chainlength >= 0){
+          printf("candis[%d] = %s, chainlength %u\n", i, chainorg.get_str(10).c_str(), chainlength);
 					
 					mpz_class sharemulti = hash.primorial * multi;
 					
