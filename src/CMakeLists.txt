@@ -10,9 +10,9 @@ set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
 )
 
 find_package(OpenSSL REQUIRED)
-  IF (BUILDOPENCLMINER)
+IF (BUILDOPENCLMINER)
+  include(FindOpenCL)
 endif()
-include(FindOpenCL)
 include(FindDependencies)
 include(TestBigEndian)
 include(CheckTypeSize)
