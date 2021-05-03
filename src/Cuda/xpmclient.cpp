@@ -868,9 +868,10 @@ int main(int argc, char **argv) {
   bool hasChanged;
   getblock.run();
   while(!(workTemplate = getblock.get(0, workTemplate, &dataId, &hasChanged) ) ) {
-    printf("block %ld\n", (long int)workTemplate);
+    printf("blocktemplate %ld\n", (long int)workTemplate);
     usleep(100);
   }
+  printf("blocktemplate %ld\n", (long int)workTemplate);
   printf("block height %d\n", workTemplate->height);
   exit(0);
 
