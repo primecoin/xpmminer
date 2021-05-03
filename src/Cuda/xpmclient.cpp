@@ -866,7 +866,7 @@ int main(int argc, char **argv) {
   unsigned int dataId;
   bool hasChanged;
   workTemplate = getblock.get(0, workTemplate, &dataId, &hasChanged);
-  printf("blockheight %u\n", workTemplate->height);
+  printf("blockheight %d\n", (int)workTemplate);
 
 
   {
