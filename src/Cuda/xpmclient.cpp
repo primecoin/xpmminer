@@ -419,7 +419,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       blockheader.hashMerkleRoot.SetHex(blkhex);
       blockheader.time = workTemplate->curtime;
       blockheader.bits = *(uint32_t*)workTemplate->diffbits;
-      blockheader.nonce = 0;
+      blockheader.nonce = 1;
 			testParams.nBits = blockheader.bits;
 			
 			unsigned target = TargetGetLength(blockheader.bits);
