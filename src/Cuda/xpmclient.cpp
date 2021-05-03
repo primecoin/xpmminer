@@ -868,6 +868,7 @@ int main(int argc, char **argv) {
   bool hasChanged;
   workTemplate = getblock.get(0, workTemplate, &dataId, &hasChanged);
   printf("blockheight %ld\n", (long int)workTemplate);
+  exit(0);
 
   {
 		int np = sizeof(gPrimes)/sizeof(unsigned);
