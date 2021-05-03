@@ -161,7 +161,7 @@ blktemplate_t *blktmpl_duplicate(blktemplate_t *tmpl) {
   } else {
     result->txns = 0;
   }
-  
+  printf("finished dup\n");
   
   return result;
 }
