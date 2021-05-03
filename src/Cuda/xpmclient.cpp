@@ -866,6 +866,7 @@ int main(int argc, char **argv) {
   blktemplate_t *workTemplate = 0;
   unsigned int dataId;
   bool hasChanged;
+  getblock.run();
   workTemplate = getblock.get(0, workTemplate, &dataId, &hasChanged);
   printf("blockheight %ld\n", (long int)workTemplate);
   exit(0);
