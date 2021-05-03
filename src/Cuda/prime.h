@@ -64,7 +64,7 @@ inline void mpz_set_uint256(mpz_t r, uint256& u)
     mpz_import(r, 32 / sizeof(unsigned long), -1, sizeof(unsigned long), -1, 0, &u);
 }
 
-bool ProbablePrimeChainTestFastcuda(const mpz_class& mpzPrimeChainOrigin, CPrimalityTestParamscuda& testParams, int base);
+bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrimalityTestParamscuda& testParams, int base);
 
 
 

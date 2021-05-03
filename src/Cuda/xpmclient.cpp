@@ -692,7 +692,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
 				chainorg *= multi;
 				
 				testParams.nCandidateType = candi.type;
-        bool isblock = ProbablePrimeChainTestFastcuda(chainorg, testParams, mDepth);
+        bool isblock = ProbablePrimeChainTestFastCuda(chainorg, testParams, mDepth);
 				unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
 				/*printf("candi %d: hashid=%d index=%d origin=%d type=%d length=%d\n",

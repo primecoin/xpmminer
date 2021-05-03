@@ -229,7 +229,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
   }
 }
 
-bool ProbablePrimeChainTestFastcuda(const mpz_class& mpzPrimeChainOrigin, CPrimalityTestParamscuda& testParams, int base)
+bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrimalityTestParamscuda& testParams, int base)
 {
   const unsigned int nBits = testParams.nBits;
   const unsigned int nCandidateType = testParams.nCandidateType;
