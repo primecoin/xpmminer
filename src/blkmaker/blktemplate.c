@@ -140,8 +140,10 @@ blktemplate_t *blktmpl_duplicate(blktemplate_t *tmpl) {
   blktemplate_t *result = malloc(sizeof(blktemplate_t));
   
   memcpy(result, tmpl, sizeof(blktemplate_t));
+  printf("after memcp\n");
   if (tmpl->lp.uri)
     result->lp.uri = strdup(tmpl->lp.uri);
+  printf("after tmpl->lp.uri\n");
   if (tmpl->lp.id)
     result->lp.id = strdup(tmpl->lp.id);
   if (tmpl->workid)
