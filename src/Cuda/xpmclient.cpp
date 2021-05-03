@@ -408,6 +408,11 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       }
 
       blockheader.version = workTemplate->version;
+      char blkhex[128];
+      _blkmk_bin2hex(blkhex, workTemplate->prevblk, 32);
+      printf("prevblk hex %s\n", blkhex);
+      _blkmk_bin2hex(blkhex, workTemplate->_mrklroot, 32);
+      printf("_mrklroot hex %s\n", blkhex);
       memcpy( &(blockheader.hashPrevBlock), workTemplate->prevblk, 32);
       memcpy( &(blockheader.hashMerkleRoot), workTemplate->_mrklroot, 32);
       blockheader.time = workTemplate->curtime;
