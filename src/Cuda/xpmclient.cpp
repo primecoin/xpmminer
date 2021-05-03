@@ -871,7 +871,7 @@ int main(int argc, char **argv) {
     printf("blocktemplate %ld\n", (long int)workTemplate);
     usleep(100);
   }
-  printf("blocktemplate %ld\n", (long int)workTemplate);
+  printf("blocktemplate_rwrqwrqw %ld\n", (long int)workTemplate);
   printf("block height %d\n", workTemplate->height);
   exit(0);
 
