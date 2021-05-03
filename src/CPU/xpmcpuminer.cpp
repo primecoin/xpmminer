@@ -371,7 +371,7 @@ int main(int argc, char **argv)
   bool isBenchmark = false;
   int index = 0, c;
   initCmdLineOptions(gOptions);
-  const char *platform = "NVIDIA CUDA";
+  const char *platform = "Advanced Micro Devices, Inc.";
   while ((c = getopt_long(argc, argv, "bo:u:p:w:h", gOptions, &index)) != -1) {
     switch (c) {
       case 0 :
@@ -384,6 +384,22 @@ int main(int argc, char **argv)
             break;
           case clPrimorial :
             gPrimorial = atoi(optarg);
+            break;
+          case clSieveSize :
+            gSieveSize = atoi(optarg);
+            if (gSieveSize > CSieveOfEratosthenesL1Ext::MaxSieveSize) {
+              fprintf(stderr, "Sieve size limited by %u, you try launch with %u\n",
+                      CSieveOfEratosthenesL1Ext::MaxSieveSize, gSieveSize);
+              exit(1);
+            }
+            break;
+          case clWeaveDepth :
+            gWeaveDepth = atoi(optarg);
+            if (gWeaveDepth > CSieveOfEratosthenesL1Ext::MaxDepth) {
+              fprintf(stderr, "Weave depth limited by %u, you try launch with %u\n",
+                      CSieveOfEratosthenesL1Ext::MaxDepth, gWeaveDepth);
+              exit(1);
+            }
             break;
           case clThreadsNum :
             gThreadsNum = atoi(optarg);
@@ -432,28 +448,16 @@ int main(int argc, char **argv)
     fprintf(stderr, "Error: you must specify wallet\n");
     exit(1);
   }
-  printf("block sum is %d\n", gThreadsNum);
-  GetBlockTemplateContext getblock(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
-  getblock.run();
-  SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
-  blktemplate_t *workTemplate = 0;
-  unsigned int dataId;
-  bool hasChanged;
-  while(!(workTemplate = getblock.get(0, workTemplate, &dataId, &hasChanged) ) ) {
-    printf("blocktemplate %ld\n", (long int)workTemplate);
-    usleep(500);
+  
+  if (extraNonce == 0)
+    extraNonce = time(0);
+
+  if (isBenchmark) {
+    fermatTestBenchmark(10.5);
+    sieveL1ExtBenchmark(10.5);
+    benchmark(10.5);
+    return 0;
   }
-  printf("blocktemplate_rwrqwrqw %ld\n", (long int)workTemplate);
-  printf("block height %d\n", workTemplate->height);
-  exit(0);
-
-
-
-
-
-
-
-
  
   WINDOW *display = initscr();
   WINDOW *log = newwin(30, 160, 3 + gThreadsNum + 12, 0);
