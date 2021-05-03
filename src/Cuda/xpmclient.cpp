@@ -411,10 +411,10 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       char blkhex[128];
       _blkmk_bin2hex(blkhex, workTemplate->prevblk, 32);
       printf("prevblk hex %s\n", blkhex);
+      blockheader.hashPrevBlock.SetHex(blkhex);
       _blkmk_bin2hex(blkhex, workTemplate->_mrklroot, 32);
       printf("_mrklroot hex %s\n", blkhex);
-      memcpy( &(blockheader.hashPrevBlock), workTemplate->prevblk, 32);
-      memcpy( &(blockheader.hashMerkleRoot), workTemplate->_mrklroot, 32);
+      blockheader.hashMerkleRoot.SetHex(blkhex);
       blockheader.time = workTemplate->curtime;
       blockheader.bits = *(uint32_t*)workTemplate->diffbits;
       blockheader.nonce = 0;
