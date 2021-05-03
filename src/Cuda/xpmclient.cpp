@@ -24,6 +24,18 @@
 #include "prime.h"
 #include <openssl/bn.h>
 #include <openssl/sha.h>
+
+void _blkmk_bin2hex(char *out, void *data, size_t datasz) {
+	unsigned char *datac = (unsigned char *)data;
+	static char hex[] = "0123456789abcdef";
+	out[datasz * 2] = '\0';
+	for (size_t i = 0; i < datasz; ++i)
+	{
+		out[ i*2   ] = hex[datac[i] >> 4];
+		out[(i*2)+1] = hex[datac[i] & 15];
+	}
+}
+
 unsigned gDebug = 0;
 int gExtensionsNum = 9;
 int gPrimorial = 19;
@@ -683,7 +695,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
 					PrimecoinBlockHeader work;
           work.version = blockheader.version;
           char blkhex[128];
-          my_bin2hex(blkhex, workTemplate->prevblk, 32);
+          _blkmk_bin2hex(blkhex, workTemplate->prevblk, 32);
           printf("prevblk hex %s\n", blkhex);
           memcpy(work.hashPrevBlock, workTemplate->prevblk, 32);
           memcpy(work.hashMerkleRoot, workTemplate->_mrklroot, 32);
