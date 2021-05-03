@@ -408,6 +408,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         }
       }
 
+      printf("version is %u\n", workTemplate->version);
       blockheader.version = workTemplate->version;
       char blkhex[128];
       _blkmk_bin2hex(blkhex, workTemplate->prevblk, 32);
@@ -710,7 +711,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           work.nonce = hash.nonce;
           uint8_t buffer[256];
           BIGNUM *xxx = 0;
-          mpz_class targetMultiplier = multi;
+          mpz_class targetMultiplier = hash.primorial * multi;
           BN_dec2bn(&xxx, targetMultiplier.get_str().c_str());
           BN_bn2mpi(xxx, buffer);
           work.multiplier[0] = buffer[3];
