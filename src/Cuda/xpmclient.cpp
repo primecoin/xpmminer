@@ -864,7 +864,6 @@ int main(int argc, char **argv) {
   printf("block sum is %d\n", gThreadsNum);
   GetBlockTemplateContext getblock(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
   getblock.run();
-  SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
   blktemplate_t *workTemplate = 0;
   unsigned int dataId;
   bool hasChanged;
@@ -874,6 +873,19 @@ int main(int argc, char **argv) {
   }
   printf("blocktemplate_rwrqwrqw %ld\n", (long int)workTemplate);
   printf("block height %d\n", workTemplate->height);
+  
+  SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
+
+  PrimecoinBlockHeader work;
+  if (hasChanged) {
+      work.version = workTemplate->version;
+      memcpy(work.hashPrevBlock, workTemplate->prevblk, 32);
+      memcpy(work.hashMerkleRoot, workTemplate->_mrklroot, 32);
+      work.time = workTemplate->curtime;
+      work.bits = *(uint32_t*)workTemplate->diffbits;
+      work.nonce = 0;
+    }
+  submit->submitBlock(workTemplate, work, dataId);
   exit(0);
 
   {
