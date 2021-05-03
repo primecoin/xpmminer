@@ -378,12 +378,10 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
 		// get work
 		bool reset = false;
 		{
-      printf("check work\n");
       workTemplate = gbp->get(0, workTemplate, &dataId, &hasChanged);
 			if(workTemplate && hasChanged){
         run = true;//ReceivePub(work, worksub);
 				reset = true;
-        printf("reset work\n");
 			}
 		}
 		if(!run)
@@ -412,10 +410,8 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       blockheader.version = workTemplate->version;
       char blkhex[128];
       _blkmk_bin2hex(blkhex, workTemplate->prevblk, 32);
-      printf("prevblk hex %s\n", blkhex);
       blockheader.hashPrevBlock.SetHex(blkhex);
       _blkmk_bin2hex(blkhex, workTemplate->_mrklroot, 32);
-      printf("_mrklroot hex %s\n", blkhex);
       blockheader.hashMerkleRoot.SetHex(blkhex);
       blockheader.time = workTemplate->curtime;
       blockheader.bits = *(uint32_t*)workTemplate->diffbits;
@@ -423,7 +419,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
 			testParams.nBits = blockheader.bits;
 			
 			unsigned target = TargetGetLength(blockheader.bits);
-      printf("target is %u\n", target);
       precalcSHA256(&blockheader, hashmod.midstate._hostData, &precalcData);
       hashmod.count[0] = 0;
       CUDA_SAFE_CALL(hashmod.midstate.copyToDevice(mHMFermatStream));
@@ -446,15 +441,11 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           if (primorialBitField & (1 << j))
             realPrimorial *= gPrimes[j];
         }
-        printf("tag1, %lu\n", realPrimorial);
 
         mpz_class mpzRealPrimorial;
-        printf("to import 1\n");
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
-        printf("import 1, (%d,%d), %s\n", mPrimorial, primorialIdx, mpzRealPrimorial.get_str(10).c_str());
         primorialIdx = std::max(mPrimorial, primorialIdx) - mPrimorial;
         mpz_class mpzHashMultiplier = primorial[primorialIdx] / mpzRealPrimorial;
-        printf("to divid primorial[%u<=%u] = %s\n", primorialIdx, maxHashPrimorial, mpzHashMultiplier.get_str(10).c_str());
         unsigned hashMultiplierSize = mpz_sizeinbase(mpzHashMultiplier.get_mpz_t(), 2);
         mpz_import(mpzRealPrimorial.get_mpz_t(), 2, -1, 4, 0, 0, &realPrimorial);
 
@@ -703,7 +694,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           work.version = blockheader.version;
           char blkhex[128];
           _blkmk_bin2hex(blkhex, workTemplate->prevblk, 32);
-          printf("prevblk hex %s\n", blkhex);
           memcpy(work.hashPrevBlock, workTemplate->prevblk, 32);
           memcpy(work.hashMerkleRoot, workTemplate->_mrklroot, 32);
           work.time = hash.time;
