@@ -31,9 +31,11 @@ void _blkmk_bin2hex(char *out, void *data, size_t datasz) {
 	out[datasz * 2] = '\0';
 	for (size_t i = 0; i < datasz; ++i)
 	{
-		out[ i*2   ] = hex[datac[i] >> 4];
-		out[(i*2)+1] = hex[datac[i] & 15];
+    int j = datasz -1 - i;
+		out[ j*2   ] = hex[datac[i] >> 4];
+		out[(j*2)+1] = hex[datac[i] & 15];
 	}
+
 }
 
 unsigned gDebug = 0;
