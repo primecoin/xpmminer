@@ -139,6 +139,7 @@ void blktxn_copy(struct blktxn_t *out, struct blktxn_t *in) {
 blktemplate_t *blktmpl_duplicate(blktemplate_t *tmpl) {
   blktemplate_t *result = malloc(sizeof(blktemplate_t));
   
+  printf("to memcpy\n");
   memcpy(result, tmpl, sizeof(blktemplate_t));
   printf("after memcp\n");
   if (tmpl->lp.uri)
