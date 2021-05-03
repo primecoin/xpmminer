@@ -22,7 +22,7 @@ extern unsigned int nTargetMinLength;
 
 
 
-class CPrimalityTestParamscuda
+class CPrimalityTestParamsCuda
 {
 public:
     // GMP C++ variables
@@ -45,7 +45,7 @@ public:
     // Results
     unsigned int nChainLength;
 
-    CPrimalityTestParamscuda()
+    CPrimalityTestParamsCuda()
     {
         nBits = 0;
         nCandidateType = 0;
@@ -64,7 +64,7 @@ inline void mpz_set_uint256(mpz_t r, uint256& u)
     mpz_import(r, 32 / sizeof(unsigned long), -1, sizeof(unsigned long), -1, 0, &u);
 }
 
-bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrimalityTestParamscuda& testParams, int base);
+bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrimalityTestParamsCuda& testParams, int base);
 
 
 

@@ -280,7 +280,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   cudaBuffer<uint32_t> candidatesCountBuffers[SW][2];
   pipeline_t fermat320;
   pipeline_t fermat352;
-	CPrimalityTestParamscuda testParams;
+	CPrimalityTestParamsCuda testParams;
 	std::vector<fermat_t> candis;
   unsigned numHashCoeff = 32768;
 
