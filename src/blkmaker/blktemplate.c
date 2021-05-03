@@ -162,5 +162,6 @@ blktemplate_t *blktmpl_duplicate(blktemplate_t *tmpl) {
     result->txns = 0;
   }
   
+  
   return result;
 }
