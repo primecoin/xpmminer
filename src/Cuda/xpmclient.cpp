@@ -858,6 +858,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Error: you must specify wallet\n");
     exit(1);
   }
+  printf("block sum is %d\n", gThreadsNum);
   GetBlockTemplateContext getblock(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
   getblock.run();
   SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
