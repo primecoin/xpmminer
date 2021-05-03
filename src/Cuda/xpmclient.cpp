@@ -793,6 +793,7 @@ void initCmdLineOptions(option *options)
 }
 
 int main(int argc, char **argv) {
+  /*
   option gOptions[clOptionsNum];
   bool isBenchmark = false;
   int index = 0, c;
@@ -867,6 +868,7 @@ int main(int argc, char **argv) {
   bool hasChanged;
   workTemplate = getblock.get(0, workTemplate, &dataId, &hasChanged);
   printf("blockheight %ld\n", (long int)workTemplate);
+  */
 
 
   {
