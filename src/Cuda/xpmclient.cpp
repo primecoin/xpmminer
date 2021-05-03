@@ -710,7 +710,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           work.nonce = hash.nonce;
           uint8_t buffer[256];
           BIGNUM *xxx = 0;
-          mpz_class targetMultiplier = hash.primorial * multi;
+          mpz_class targetMultiplier = multi;
           BN_dec2bn(&xxx, targetMultiplier.get_str().c_str());
           BN_bn2mpi(xxx, buffer);
           work.multiplier[0] = buffer[3];
