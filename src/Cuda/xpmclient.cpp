@@ -793,7 +793,9 @@ void initCmdLineOptions(option *options)
 }
 
 int main(int argc, char **argv) {
-
+  srand(time(0));  
+  blkmk_sha256_impl = sha256;
+  PrimeSource primeSource(10000000, gWeaveDepth+256);
   option gOptions[clOptionsNum];
   bool isBenchmark = false;
   int index = 0, c;
