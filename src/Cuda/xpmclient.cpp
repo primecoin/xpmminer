@@ -367,7 +367,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       printf("check work\n");
       workTemplate = 0;
       workTemplate = gbp->get(0, workTemplate, &dataId, &hasChanged);
-			while(workTemplate && hasChanged){
+			if(workTemplate && hasChanged){
         run = true;//ReceivePub(work, worksub);
 				reset = true;
         printf("reset work **************++++++++++++++==\n");
