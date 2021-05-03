@@ -364,11 +364,13 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
 		// get work
 		bool reset = false;
 		{
+      printf("check work\n");
       workTemplate = 0;
       workTemplate = gbp->get(0, workTemplate, &dataId, &hasChanged);
 			while(workTemplate && hasChanged){
         run = true;//ReceivePub(work, worksub);
 				reset = true;
+        printf("reset work **************++++++++++++++==\n");
 			}
 		}
 		if(!run)
@@ -883,12 +885,12 @@ int main(int argc, char **argv) {
   blktemplate_t *workTemplate = 0;
   unsigned int dataId;
   bool hasChanged;
-  while(!(workTemplate = getblock->get(0, workTemplate, &dataId, &hasChanged) ) ) {
-    printf("blocktemplate %ld\n", (long int)workTemplate);
-    usleep(500);
-  }
-  printf("blocktemplate_rwrqwrqw %ld\n", (long int)workTemplate);
-  printf("block height %d\n", workTemplate->height);
+  //while(!(workTemplate = getblock->get(0, workTemplate, &dataId, &hasChanged) ) ) {
+  //  printf("blocktemplate %ld\n", (long int)workTemplate);
+  //  usleep(500);
+  //}
+  //printf("blocktemplate_rwrqwrqw %ld\n", (long int)workTemplate);
+  //printf("block height %d\n", workTemplate->height);
   
   SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
 

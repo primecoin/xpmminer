@@ -196,7 +196,6 @@ blktemplate_t *GetBlockTemplateContext::get(unsigned blockIdx, blktemplate_t *ol
     if (old)
       blktmpl_free(old);
     *dataId = _dataId;
-    printf("to duplicate %d\n", _blockTemplateExists);
     return _blockTemplateExists ? blktmpl_duplicate(_blocks[blockIdx]) : 0;
   }
 }

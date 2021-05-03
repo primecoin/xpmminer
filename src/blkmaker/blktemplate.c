@@ -139,12 +139,9 @@ void blktxn_copy(struct blktxn_t *out, struct blktxn_t *in) {
 blktemplate_t *blktmpl_duplicate(blktemplate_t *tmpl) {
   blktemplate_t *result = malloc(sizeof(blktemplate_t));
   
-  printf("to memcpy\n");
   memcpy(result, tmpl, sizeof(blktemplate_t));
-  printf("after memcp\n");
   if (tmpl->lp.uri)
     result->lp.uri = strdup(tmpl->lp.uri);
-  printf("after tmpl->lp.uri\n");
   if (tmpl->lp.id)
     result->lp.id = strdup(tmpl->lp.id);
   if (tmpl->workid)
@@ -164,7 +161,6 @@ blktemplate_t *blktmpl_duplicate(blktemplate_t *tmpl) {
   } else {
     result->txns = 0;
   }
-  printf("finished dup\n");
   
   return result;
 }
