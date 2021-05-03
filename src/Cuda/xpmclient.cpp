@@ -705,12 +705,12 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           printf("prevblk hex %s\n", blkhex);
           memcpy(work.hashPrevBlock, workTemplate->prevblk, 32);
           memcpy(work.hashMerkleRoot, workTemplate->_mrklroot, 32);
-          work.time = blockheader.time;
+          work.time = hash.time;
           work.bits = blockheader.bits;
-          work.nonce = blockheader.nonce;
-					uint8_t buffer[256];
+          work.nonce = hash.nonce;
+          uint8_t buffer[256];
           BIGNUM *xxx = 0;
-          mpz_class targetMultiplier = hash.primorial*multi;
+          mpz_class targetMultiplier = hash.primorial * multi;
           BN_dec2bn(&xxx, targetMultiplier.get_str().c_str());
           BN_bn2mpi(xxx, buffer);
           work.multiplier[0] = buffer[3];
