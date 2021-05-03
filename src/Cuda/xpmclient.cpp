@@ -682,6 +682,9 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           printf("candis[%d] = %s, chainlength %u\n", i, chainorg.get_str(10).c_str(), chainlength);
 					PrimecoinBlockHeader work;
           work.version = blockheader.version;
+          char blkhex[128];
+          my_bin2hex(blkhex, workTemplate->prevblk, 32);
+          printf("prevblk hex %s\n", blkhex);
           memcpy(work.hashPrevBlock, workTemplate->prevblk, 32);
           memcpy(work.hashMerkleRoot, workTemplate->_mrklroot, 32);
           work.time = blockheader.time;
