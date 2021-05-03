@@ -859,7 +859,8 @@ int main(int argc, char **argv) {
     exit(1);
   }
   GetBlockTemplateContext getblock(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
-  SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);;
+  getblock.run();
+  SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
   blktemplate_t *workTemplate = 0;
   unsigned int dataId;
   bool hasChanged;
