@@ -22,6 +22,8 @@
 #include <math.h>
 #include <map>
 #include "prime.h"
+#include <openssl/bn.h>
+#include <openssl/sha.h>
 unsigned gDebug = 0;
 int gExtensionsNum = 9;
 int gPrimorial = 19;
@@ -229,9 +231,12 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
   }
 }
 
-void PrimeMiner::Mining() {
+void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   cuCtxSetCurrent(_context);
   time_t starttime = time(0);
+  unsigned int dataId;
+  bool hasChanged;
+  blktemplate_t *workTemplate = 0;
 
 	stats_t stats;
 	stats.id = mID;
@@ -359,14 +364,11 @@ void PrimeMiner::Mining() {
 		// get work
 		bool reset = false;
 		{
-			bool getwork = true;
-			while(getwork && run){
-        if(loadworkaccount==0){
-          run = true;//ReceivePub(work, worksub);
-					reset = true;
-          loadworkaccount = 1;
-				}
-				getwork = false;
+      workTemplate = 0;
+      workTemplate = gbp->get(0, workTemplate, &dataId, &hasChanged);
+			while(workTemplate && hasChanged){
+        run = true;//ReceivePub(work, worksub);
+				reset = true;
 			}
 		}
 		if(!run)
@@ -391,15 +393,16 @@ void PrimeMiner::Mining() {
         }
       }
 
-			blockheader.version = block_t::CURRENT_VERSION;
-			blockheader.hashPrevBlock.SetHex("871e5e84001d96cf9da8b9f93b74a4150f5fc9f86122822b60786476d5585392");
-			blockheader.hashMerkleRoot.SetHex("0114b9b25a384485a756541a1c65f4827148f83547a3eb964fa06ceb950d3cb1");
-			blockheader.time = 1619348903;
-			blockheader.bits = 0x0ad96159;
-			blockheader.nonce = 1;
+      blockheader.version = workTemplate->version;
+      memcpy( &(blockheader.hashPrevBlock), workTemplate->prevblk, 32);
+      memcpy( &(blockheader.hashMerkleRoot), workTemplate->_mrklroot, 32);
+      blockheader.time = workTemplate->curtime;
+      blockheader.bits = *(uint32_t*)workTemplate->diffbits;
+      blockheader.nonce = 0;
 			testParams.nBits = blockheader.bits;
 			
 			unsigned target = TargetGetLength(blockheader.bits);
+      printf("target is %u\n", target);
       precalcSHA256(&blockheader, hashmod.midstate._hostData, &precalcData);
       hashmod.count[0] = 0;
       CUDA_SAFE_CALL(hashmod.midstate.copyToDevice(mHMFermatStream));
@@ -673,10 +676,23 @@ void PrimeMiner::Mining() {
 
 				/*printf("candi %d: hashid=%d index=%d origin=%d type=%d length=%d\n",
 						i, candi.hashid, candi.index, candi.origin, candi.type, chainlength);*/
-				if(chainlength >= 0){
+				if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("candis[%d] = %s, chainlength %u\n", i, chainorg.get_str(10).c_str(), chainlength);
-					
-					mpz_class sharemulti = hash.primorial * multi;
+					PrimecoinBlockHeader work;
+          work.version = blockheader.version;
+          memcpy(work.hashPrevBlock, workTemplate->prevblk, 32);
+          memcpy(work.hashMerkleRoot, workTemplate->_mrklroot, 32);
+          work.time = blockheader.time;
+          work.bits = blockheader.bits;
+          work.nonce = blockheader.nonce;
+					uint8_t buffer[256];
+          BIGNUM *xxx = 0;
+          mpz_class targetMultiplier = hash.primorial*multi;
+          BN_dec2bn(&xxx, targetMultiplier.get_str().c_str());
+          BN_bn2mpi(xxx, buffer);
+          work.multiplier[0] = buffer[3];
+          std::reverse_copy(buffer+4, buffer+4+buffer[3], work.multiplier+1);
+          submit->submitBlock(workTemplate, work, dataId);
 					
           LOG_F(1, "GPU %d found share: %d-ch type %d", mID, chainlength, candi.type+1);
 					if(isblock)
@@ -862,12 +878,12 @@ int main(int argc, char **argv) {
     exit(1);
   }
   printf("block sum is %d\n", gThreadsNum);
-  GetBlockTemplateContext getblock(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
-  getblock.run();
+  GetBlockTemplateContext* getblock = new GetBlockTemplateContext(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
+  getblock->run();
   blktemplate_t *workTemplate = 0;
   unsigned int dataId;
   bool hasChanged;
-  while(!(workTemplate = getblock.get(0, workTemplate, &dataId, &hasChanged) ) ) {
+  while(!(workTemplate = getblock->get(0, workTemplate, &dataId, &hasChanged) ) ) {
     printf("blocktemplate %ld\n", (long int)workTemplate);
     usleep(500);
   }
@@ -875,18 +891,6 @@ int main(int argc, char **argv) {
   printf("block height %d\n", workTemplate->height);
   
   SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
-
-  PrimecoinBlockHeader work;
-  if (hasChanged) {
-      work.version = workTemplate->version;
-      memcpy(work.hashPrevBlock, workTemplate->prevblk, 32);
-      memcpy(work.hashMerkleRoot, workTemplate->_mrklroot, 32);
-      work.time = workTemplate->curtime;
-      work.bits = *(uint32_t*)workTemplate->diffbits;
-      work.nonce = 0;
-    }
-  submit->submitBlock(workTemplate, work, dataId);
-  exit(0);
 
   {
 		int np = sizeof(gPrimes)/sizeof(unsigned);
@@ -980,7 +984,7 @@ int main(int argc, char **argv) {
   for(unsigned i = 0; i < gpus.size(); ++i) {
       PrimeMiner* miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
       miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
-      miner->Mining();
+      miner->Mining(getblock, submit);
   }
 
   return 0;

@@ -11,7 +11,7 @@ static void dbgPrint(const char *fmt, ...)
 #ifndef NDEBUG
   va_list arguments;
   va_start(arguments, fmt);
-  vfprintf(stderr, fmt, arguments);
+  fprintf(stderr, fmt, arguments);
 #endif
 }
 
