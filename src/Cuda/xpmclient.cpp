@@ -861,15 +861,14 @@ int main(int argc, char **argv) {
   }
   printf("block sum is %d\n", gThreadsNum);
   GetBlockTemplateContext getblock(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
-  //getblock.run();
+  getblock.run();
   SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
   blktemplate_t *workTemplate = 0;
   unsigned int dataId;
   bool hasChanged;
-  getblock.run();
   while(!(workTemplate = getblock.get(0, workTemplate, &dataId, &hasChanged) ) ) {
     printf("blocktemplate %ld\n", (long int)workTemplate);
-    usleep(100);
+    usleep(500);
   }
   printf("blocktemplate_rwrqwrqw %ld\n", (long int)workTemplate);
   printf("block height %d\n", workTemplate->height);
