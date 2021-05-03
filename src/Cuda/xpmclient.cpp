@@ -862,9 +862,13 @@ int main(int argc, char **argv) {
   WINDOW *display = initscr();
   WINDOW *log = newwin(30, 160, 3 + gThreadsNum + 12, 0);
   scrollok(log, TRUE); 
-  GetBlockTemplateContext ctx(log, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
+  GetBlockTemplateContext getblock(log, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
   SubmitContext *submit = new SubmitContext(log, gUrl, gUserName, gPassword);;
-
+  blktemplate_t *workTemplate = 0;
+  unsigned int dataId;
+  bool hasChanged;
+  workTemplate = getblock.get(0, workTemplate, &dataId, &hasChanged);
+  printf("blockheight %u\n", workTemplate->height);
 
 
   {
