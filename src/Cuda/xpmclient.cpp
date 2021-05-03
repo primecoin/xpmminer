@@ -261,7 +261,7 @@ void PrimeMiner::Mining() {
   cudaBuffer<uint32_t> candidatesCountBuffers[SW][2];
   pipeline_t fermat320;
   pipeline_t fermat352;
-	CPrimalityTestParams testParams(bitsFromDifficulty(10));
+	CPrimalityTestParamscuda testParams;
 	std::vector<fermat_t> candis;
   unsigned numHashCoeff = 32768;
 
@@ -397,7 +397,7 @@ void PrimeMiner::Mining() {
 			blockheader.time = 1619348903;
 			blockheader.bits = 0x0ad96159;
 			blockheader.nonce = 1;
-			testParams.bits = blockheader.bits;
+			testParams.nBits = blockheader.bits;
 			
 			unsigned target = TargetGetLength(blockheader.bits);
       precalcSHA256(&blockheader, hashmod.midstate._hostData, &precalcData);
@@ -667,9 +667,9 @@ void PrimeMiner::Mining() {
         printf("origin = %s\n", chainorg.get_str(10).c_str());
 				chainorg *= multi;
 				
-				testParams.candidateType = candi.type;
-        bool isblock = ProbablePrimeChainTestFast(chainorg, testParams);
-				unsigned chainlength = TargetGetLength(testParams.chainLength);
+				testParams.nCandidateType = candi.type;
+        bool isblock = ProbablePrimeChainTestFastcuda(chainorg, testParams, mDepth);
+				unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
 				/*printf("candi %d: hashid=%d index=%d origin=%d type=%d length=%d\n",
 						i, candi.hashid, candi.index, candi.origin, candi.type, chainlength);*/
