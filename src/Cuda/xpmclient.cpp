@@ -22,7 +22,6 @@
 #include <math.h>
 #include <map>
 #include "prime.h"
-#include <ncurses.h>
 unsigned gDebug = 0;
 int gExtensionsNum = 9;
 int gPrimorial = 19;
@@ -859,11 +858,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Error: you must specify wallet\n");
     exit(1);
   }
-  WINDOW *display = initscr();
-  WINDOW *log = newwin(30, 160, 3 + gThreadsNum + 12, 0);
-  scrollok(log, TRUE); 
-  GetBlockTemplateContext getblock(log, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
-  SubmitContext *submit = new SubmitContext(log, gUrl, gUserName, gPassword);;
+  GetBlockTemplateContext getblock(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
+  SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);;
   blktemplate_t *workTemplate = 0;
   unsigned int dataId;
   bool hasChanged;
