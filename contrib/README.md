@@ -6,4 +6,7 @@ How to deploy xpmclient:
 
   CUDA10_INSTALLER="cuda_10.0.130_411.31_win10.exe"
   
+  In contrib 
+  chmod +111 build.sh
+
 4. run deploy.sh

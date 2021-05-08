@@ -27,7 +27,6 @@ target_link_libraries(xpmclminer
   ${CURL_LIBRARY}
   ${JANSSON_LIBRARY}
   ${OPENCL_LIBRARIES}
-  ${NCURSES_LIBRARY}  
 )
 
 if (OS_LINUX)

@@ -14,8 +14,8 @@ make install
 
 # openssl
 cd /home/user/build/deps-linux
-tar -xzf ../openssl-1.0.0.tar.gz
-cd openssl-1.0.0
+tar -xzf ../openssl-1.1.0.tar.gz
+cd openssl-1.1.0
 ./config --prefix=/home/user/install/x86_64-Linux no-shared
 make -j`nproc`
 make install
@@ -32,14 +32,6 @@ make install
 cd /home/user/build/deps-linux
 tar -xzf ../jansson-2.11.tar.gz
 cd jansson-2.11
-./configure --prefix=/home/user/install/x86_64-Linux --enable-static --disable-shared
-make -j`nproc`
-make install
-
-# ncurses
-cd /home/user/build/deps-linux
-tar -xzf ../ncurses-5.0.tar.gz
-cd ncurses-5.0
 ./configure --prefix=/home/user/install/x86_64-Linux --enable-static --disable-shared
 make -j`nproc`
 make install
