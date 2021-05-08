@@ -452,7 +452,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         block_t b = blockheader;
           b.nonce = hash.nonce;
 
-          //printf("before hash\n");
           SHA_256 sha;
           sha.init();
           sha.update((const unsigned char*)&b, sizeof(b));
@@ -460,8 +459,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           sha.init();
           sha.update((const unsigned char*)&hash.hash, sizeof(uint256));
           sha.final((unsigned char*)&hash.hash);
-          
-          //printf("hash %d\n", hash.hash < (uint256(1) << 255));
+
         if(hash.hash < (uint256(1) << 255)){
           LOG_F(WARNING, "hash does not meet minimum.\n");
           stats.errors++;
@@ -492,7 +490,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       
       int numhash = ((int)(16*mSievePerRound) - (int)hashes.remaining()) * numHashCoeff;
 
-      printf("numhash is %d, mLSize %u\n", numhash, mLSize);
       if(numhash > 0){
         numhash += mLSize - numhash % mLSize;
         if(blockheader.nonce > (1u << 31)){
@@ -621,7 +618,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     int numcandis = final.count[0];
     numcandis = std::min(numcandis, (int)final.info._size);
     numcandis = std::max(numcandis, 0);
-    printf("got %d new candis\n", numcandis);
     candis.resize(numcandis);
     primeCount += numcandis;
     if(numcandis)
@@ -664,7 +660,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     
     // check candis
     if(candis.size()){
-      printf("checking %d candis\n", (int)candis.size());
       mpz_class chainorg;
       mpz_class multi;
       for(unsigned i = 0; i < candis.size(); ++i){
@@ -679,15 +674,12 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         multi = candi.index;
         multi <<= candi.origin;
         chainorg = hash.shash;
-        printf("origin = %s\n", chainorg.get_str(10).c_str());
         chainorg *= multi;
         
         testParams.nCandidateType = candi.type;
         bool isblock = ProbablePrimeChainTestFastCuda(chainorg, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
-        /*printf("candi %d: hashid=%d index=%d origin=%d type=%d length=%d\n",
-            i, candi.hashid, candi.index, candi.origin, candi.type, chainlength);*/
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("candis[%d] = %s, chainlength %u\n", i, chainorg.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
