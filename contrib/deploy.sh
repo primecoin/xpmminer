@@ -71,9 +71,10 @@ docker exec $CONTAINER mkdir /home/user/build/deps-linux
 docker exec $CONTAINER mkdir /home/user/build/deps-win32
 docker exec $CONTAINER mkdir /home/user/build/xpmclient
 docker cp gmp-6.1.2.tar.lz $CONTAINER:/home/user/build
-docker cp zeromq-4.3.1.tar.gz $CONTAINER:/home/user/build
-docker cp protobuf-cpp-3.6.1.tar.gz $CONTAINER:/home/user/build
-docker cp libsodium-1.0.17.tar.gz $CONTAINER:/home/user/build
+docker cp openssl-1.0.0.tar.gz $CONTAINER:/home/user/build
+docker cp curl-7.68.0.tar.gz $CONTAINER:/home/user/build
+docker cp jansson-2.11.tar.gz $CONTAINER:/home/user/build
+docker cp ncurses-5.0.tar.gz $CONTAINER:/home/user/build
 docker cp CLRX-mirror $CONTAINER:/home/user/build
 docker cp ../src $CONTAINER:/home/user/build/xpmclient
 
