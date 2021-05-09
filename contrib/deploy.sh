@@ -66,13 +66,13 @@ fi
 docker exec $CONTAINER mkdir /home/user/build
 docker exec $CONTAINER mkdir /home/user/build/deps-linux
 docker exec $CONTAINER mkdir /home/user/build/deps-win32
-docker exec $CONTAINER mkdir /home/user/build/xpmclient
+docker exec $CONTAINER mkdir /home/user/build/xpmminer
 docker cp gmp-6.1.2.tar.lz $CONTAINER:/home/user/build
 docker cp openssl-1.1.0.tar.gz $CONTAINER:/home/user/build
 docker cp curl-7.68.0.tar.gz $CONTAINER:/home/user/build
 docker cp jansson-2.11.tar.gz $CONTAINER:/home/user/build
 docker cp CLRX-mirror $CONTAINER:/home/user/build
-docker cp ../src $CONTAINER:/home/user/build/xpmclient
+docker cp ../src $CONTAINER:/home/user/build/xpmminer
 
 # Run build
 docker cp build.sh $CONTAINER:/home/user/build
@@ -80,8 +80,8 @@ docker exec $CONTAINER /home/user/build/build.sh
 
 # Grab artifacts
 rm -rf distr && mkdir distr && cd distr
-docker cp $CONTAINER:/home/user/build/xpmclient/x86_64-Linux/xpmclient-opencl-$VERSION-linux.tar.gz .
-docker cp $CONTAINER:/home/user/build/xpmclient/x86_64-Linux/xpmclient-cuda-$VERSION-linux.tar.gz .
-docker cp $CONTAINER:/home/user/build/xpmclient/x86_64-w64-mingw32/xpmclient-opencl-$VERSION-win64.zip .
-docker cp $CONTAINER:/home/user/build/xpmclient/x86_64-w64-mingw32/xpmclient-cuda-$VERSION-win64.zip .
-docker cp $CONTAINER:/home/user/build/xpmclient/xpmclient-$VERSION-sha256.txt .
+docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-Linux/xpmminer-opencl-$VERSION-linux.tar.gz .
+docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-Linux/xpmminer-cuda-$VERSION-linux.tar.gz .
+docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-w64-mingw32/xpmminer-opencl-$VERSION-win64.zip .
+docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-w64-mingw32/xpmminer-cuda-$VERSION-win64.zip .
+docker cp $CONTAINER:/home/user/build/xpmminer/xpmminer-$VERSION-sha256.txt .
