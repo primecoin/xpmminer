@@ -62,7 +62,7 @@ cd xpmminer-cuda-$VERSION-linux
 cp ../Cuda/xpmcuda ./miner
 echo "#/bin/bash" > xpmminernv
 echo "DIR=\$(dirname \"\$0\")" >> xpmminernv
-echo "LD_LIBRARY_PATH=\$DIR/. ./miner \$@" >> xpmminernv
+echo "LD_LIBRARY_PATH=\$DIR/. ./miner --url primea.primecoin.org:9912 --user primecoinrpc --pass PASSWORD   --wallet AbMXJscCQUP28rySq8NYorqHouEo5zF8eH" >> xpmminernv
 chmod +x xpmminernv
 mkdir -p xpm/cuda
 cp ../../src/Cuda/*.cu xpm/cuda
