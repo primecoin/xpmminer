@@ -50,7 +50,7 @@ cd /home/user/build/xpmminer/x86_64-Linux
 cmake ../src -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=/home/user/install/x86_64-Linux \
   -DSTATIC_BUILD=ON \
-  -DCUDA_driver_LIBRARY=/usr/local/cuda-11.2/compat/libcuda.so \
+  -DCUDA_DRIVER_LIBRARY=/usr/local/cuda-11.2/compat/libcuda.so \
   -DBUILDOPENCLMINER=OFF
 make -j`nproc`
 
