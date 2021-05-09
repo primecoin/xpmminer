@@ -65,7 +65,7 @@ echo "DIR=\$(dirname \"\$0\")" >> xpmminernv
 echo "LD_LIBRARY_PATH=\$DIR/. ./miner \$@" >> xpmminernv
 chmod +x xpmminernv
 mkdir -p xpm/cuda
-cp ../../src/xpm/cuda/*.cu xpm/cuda
+cp ../../src/Cuda/*.cu xpm/cuda
 cp /usr/local/cuda-11.2/lib64/libnvrtc.so.11.2 .
 cp /usr/local/cuda-11.2/lib64/libnvrtc-builtins.so.11.2 .
 cd ..
