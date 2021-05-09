@@ -32,7 +32,7 @@ target_link_libraries(xpmclminer
   ${OPENSSL_CRYPTO_LIBRARY}
   ${CURL_LIBRARY}
   ${JANSSON_LIBRARY}
-  ${OpenCL_LIBRARY}
+  ${OPENCL_LIBRARIES}
 )
 
 if (OS_LINUX)

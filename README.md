@@ -44,7 +44,7 @@ make install
 
 CMake may be failed found OpenCL SDK. In this case, setup path to SDK manually:
 
-cmake ../src -DOPENCL_INCLUDE_DIRS=/opt/AMDAPP/include -DOpenCL_LIBRARY=/opt/AMDAPP/lib/x86_64/libOpenCL.so -DCMAKE_BUILD_TYPE=Release
+cmake ../src -DOPENCL_INCLUDE_DIRS=/opt/AMDAPP/include -DOPENCL_LIBRARIES=/opt/AMDAPP/lib/x86_64/libOpenCL.so -DCMAKE_BUILD_TYPE=Release
 
 4 Usage
 

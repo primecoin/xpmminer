@@ -8,7 +8,7 @@
 # Once done this will define
 #  OPENCL_FOUND        - system has OpenCL
 #  OPENCL_INCLUDE_DIRS  - the OpenCL include directory
-#  OpenCL_LIBRARY    - link these to use OpenCL
+#  OPENCL_LIBRARIES    - link these to use OpenCL
 #
 # WIN32 should work, but is untested
 
@@ -21,7 +21,7 @@ SET (OPENCL_VERSION_PATCH 0)
 
 IF (APPLE)
 
-  FIND_LIBRARY(OpenCL_LIBRARY OpenCL DOC "OpenCL lib for OSX")
+  FIND_LIBRARY(OPENCL_LIBRARIES OpenCL DOC "OpenCL lib for OSX")
   FIND_PATH(OPENCL_INCLUDE_DIRS OpenCL/cl.h DOC "Include for OpenCL on OSX")
   FIND_PATH(_OPENCL_CPP_INCLUDE_DIRS OpenCL/cl.hpp DOC "Include for OpenCL CPP bindings on OSX")
 
@@ -45,11 +45,11 @@ ELSE (APPLE)
 	    # find out if the user asked for a 64-bit build, and use the corresponding 
 	    # 64 or 32 bit NVIDIA library paths to the search:
 	    STRING(REGEX MATCH "Win64" ISWIN64 ${CMAKE_GENERATOR})
-	    IF("${ISWIN64}" STREQUAL "Win64") 
-	    	FIND_LIBRARY(OpenCL_LIBRARY OpenCL.lib ${OPENCL_LIB_DIR} $ENV{CUDA_LIB_PATH} $ENV{CUDA_PATH}/lib/x64)
-	    ELSE("${ISWIN64}" STREQUAL "Win64") 
-	    	FIND_LIBRARY(OpenCL_LIBRARY OpenCL.lib ${OPENCL_LIB_DIR} $ENV{CUDA_LIB_PATH} $ENV{CUDA_PATH}/lib/Win32)
-	    ENDIF("${ISWIN64}" STREQUAL "Win64") 
+	    IF("${ISWIN64}" STREQUAL "Win64")
+	    	FIND_LIBRARY(OPENCL_LIBRARIES OpenCL.lib ${OPENCL_LIB_DIR} $ENV{CUDA_LIB_PATH} $ENV{CUDA_PATH}/lib/x64)
+	    ELSE("${ISWIN64}" STREQUAL "Win64")
+	    	FIND_LIBRARY(OPENCL_LIBRARIES OpenCL.lib ${OPENCL_LIB_DIR} $ENV{CUDA_LIB_PATH} $ENV{CUDA_PATH}/lib/Win32)
+	    ENDIF("${ISWIN64}" STREQUAL "Win64")
 
 	    GET_FILENAME_COMPONENT(_OPENCL_INC_CAND ${OPENCL_LIB_DIR}/../../include ABSOLUTE)
 	    
@@ -60,11 +60,11 @@ ELSE (APPLE)
 	ELSE (WIN32)
 
             # Unix style platforms
-            FIND_LIBRARY(OpenCL_LIBRARY OpenCL
+            FIND_LIBRARY(OPENCL_LIBRARIES OpenCL
               ENV LD_LIBRARY_PATH
             )
 
-            GET_FILENAME_COMPONENT(OPENCL_LIB_DIR ${OpenCL_LIBRARY} PATH)
+            GET_FILENAME_COMPONENT(OPENCL_LIB_DIR ${OPENCL_LIBRARIES} PATH)
             GET_FILENAME_COMPONENT(_OPENCL_INC_CAND ${OPENCL_LIB_DIR}/../../include ABSOLUTE)
 
             # The AMD SDK currently does not place its headers
@@ -77,7 +77,7 @@ ELSE (APPLE)
 
 ENDIF (APPLE)
 
-FIND_PACKAGE_HANDLE_STANDARD_ARGS( OpenCL DEFAULT_MSG OpenCL_LIBRARY OPENCL_INCLUDE_DIRS )
+FIND_PACKAGE_HANDLE_STANDARD_ARGS( OpenCL DEFAULT_MSG OPENCL_LIBRARIES OPENCL_INCLUDE_DIRS )
 
 IF( _OPENCL_CPP_INCLUDE_DIRS )
 	SET( OPENCL_HAS_CPP_BINDINGS TRUE )
