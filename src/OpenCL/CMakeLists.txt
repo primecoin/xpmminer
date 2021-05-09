@@ -10,6 +10,12 @@ if (DEBUG_MINING_AMD_OPENCL)
   include_directories(${GPUPERFAPI_INCLUDE_DIRECTORY})
 endif()
 
+include_directories(
+  ${GMP_INCLUDE_DIRECTORY}
+  ${OPENSSL_INCLUDE_DIR}
+  ${JANSSON_INCLUDE_DIRECTORY}
+  ${CURL_INCLUDE_DIRECTORY}
+)
 
 add_executable(xpmclminer
   xpmclminer.cpp
@@ -26,11 +32,11 @@ target_link_libraries(xpmclminer
   ${OPENSSL_CRYPTO_LIBRARY}
   ${CURL_LIBRARY}
   ${JANSSON_LIBRARY}
-  ${OPENCL_LIBRARIES}
+  ${OpenCL_LIBRARY}
 )
 
 if (OS_LINUX)
-  target_link_libraries(xpmclminer pthread)
+  target_link_libraries(xpmclminer pthread dl)
 elseif (OS_WINDOWS)
   set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ -static")
   target_link_libraries(xpmclminer

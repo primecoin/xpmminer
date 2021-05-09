@@ -59,12 +59,11 @@ make -j`nproc`
 # make NVidia distr
 mkdir xpmminer-cuda-$VERSION-linux
 cd xpmminer-cuda-$VERSION-linux
-cp ../xpmcuda ./miner
+cp ../Cuda/xpmcuda ./miner
 echo "#/bin/bash" > xpmminernv
 echo "DIR=\$(dirname \"\$0\")" >> xpmminernv
 echo "LD_LIBRARY_PATH=\$DIR/. ./miner \$@" >> xpmminernv
 chmod +x xpmcuda
-cp ../../src/xpm/cuda/config.txt .
 mkdir -p xpm/cuda
 cp ../../src/xpm/cuda/*.cu xpm/cuda
 cp /usr/local/cuda-11.2/lib64/libnvrtc.so.11.2 .
@@ -74,7 +73,4 @@ tar -czf xpmminer-cuda-$VERSION-linux.tar.gz xpmminer-cuda-$VERSION-linux
 
 # Calculate SHA256 checksum
 cd /home/user/build/xpmminer
-sha256sum /home/user/build/xpmminer/x86_64-Linux/xpmminer-opencl-$VERSION-linux.tar.gz > xpmminer-$VERSION-sha256.txt
 sha256sum /home/user/build/xpmminer/x86_64-Linux/xpmminer-cuda-$VERSION-linux.tar.gz >> xpmminer-$VERSION-sha256.txt
-sha256sum /home/user/build/xpmminer/x86_64-w64-mingw32/xpmminer-opencl-$VERSION-win64.zip >> xpmminer-$VERSION-sha256.txt
-sha256sum /home/user/build/xpmminer/x86_64-w64-mingw32/xpmminer-cuda-$VERSION-win64.zip >> xpmminer-$VERSION-sha256.txt
