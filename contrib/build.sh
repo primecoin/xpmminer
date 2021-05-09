@@ -63,7 +63,7 @@ cp ../Cuda/xpmcuda ./miner
 echo "#/bin/bash" > xpmminernv
 echo "DIR=\$(dirname \"\$0\")" >> xpmminernv
 echo "LD_LIBRARY_PATH=\$DIR/. ./miner \$@" >> xpmminernv
-chmod +x xpmcuda
+chmod +x xpmminernv
 mkdir -p xpm/cuda
 cp ../../src/xpm/cuda/*.cu xpm/cuda
 cp /usr/local/cuda-11.2/lib64/libnvrtc.so.11.2 .
