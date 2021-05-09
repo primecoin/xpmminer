@@ -52,7 +52,8 @@ cmake ../src -DCMAKE_BUILD_TYPE=Release \
   -DSTATIC_BUILD=ON \
   -DOpenCL_INCLUDE_DIR=/usr/local/cuda-11.2/include \
   -DOpenCL_LIBRARY=/usr/local/cuda-11.2/lib64/libOpenCL.so \
-  -DCUDA_driver_LIBRARY=/usr/local/cuda-11.2/compat/libcuda.so
+  -DCUDA_driver_LIBRARY=/usr/local/cuda-11.2/compat/libcuda.so \
+  -DBUILDOPENCLMINER=OFF
 make -j`nproc`
 
 
