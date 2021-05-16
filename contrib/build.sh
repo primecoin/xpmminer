@@ -120,7 +120,8 @@ cmake ../src -DCMAKE_BUILD_TYPE=Release \
   -DSTATIC_BUILD=ON \
   -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-win32 \
   -DOpenCL_INCLUDE_DIR=/usr/local/cuda-win32/include \
-  -DOpenCL_LIBRARY=/usr/local/cuda-win32/lib/x64/OpenCL.lib
+  -DOpenCL_LIBRARY=/usr/local/cuda-win32/lib/x64/OpenCL.lib \
+  -DBUILDOPENCLMINER=OFF
 make -j`nproc` xpmclient xpmclientnv
 x86_64-w64-mingw32-strip xpmclient.exe
 x86_64-w64-mingw32-strip xpmclientnv.exe
