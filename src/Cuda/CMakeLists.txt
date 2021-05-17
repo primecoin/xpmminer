@@ -2,7 +2,7 @@ set(LIBRARIES
   ${GMP_LIBRARY}
 )
 if (WIN32)
-  set(LIBRARIES ${LIBRARIES} ws2_32 advapi32)
+  set(LIBRARIES ${LIBRARIES} ws2_32 advapi32 wldap32)
 else()
   set(LIBRARIES ${LIBRARIES} dl)
 endif()
