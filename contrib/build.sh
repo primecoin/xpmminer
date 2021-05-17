@@ -17,7 +17,7 @@ cd /home/user/build/deps-linux
 tar -xzf ../openssl-1.0.2.tar.gz
 cd openssl-1.0.2
 ./config --prefix=/home/user/install/x86_64-Linux no-shared
-make -j`nproc`
+make
 make install
 
 # curl
@@ -85,8 +85,8 @@ tar -xzf ../openssl-1.0.2.tar.gz
 cd openssl-1.0.2
 sed -i 's/:.dll.a/ -Wl,--export-all -shared:.dll.a/g' Configure
 sed -i 's,.*target already defined.*,$target=$_;,g' Configure
-./config --cross-compile-prefix="x86_64-w64-mingw32-" mingw64  --prefix=/home/user/install/x86_64-w64-mingw32 shared
-make -j`nproc`
+./Configure --cross-compile-prefix="x86_64-w64-mingw32-" mingw64  --prefix=/home/user/install/x86_64-w64-mingw32 shared
+make
 make install
 
 # curl
