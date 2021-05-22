@@ -136,16 +136,17 @@ x86_64-w64-mingw32-strip xpmcuda.exe
 # make Nvidia distr
 mkdir xpmminer-cuda-$VERSION-win64
 cd xpmminer-cuda-$VERSION-win64
-cp ../xpmcuda.exe .
+cp ../xpmcuda.exe miner.exe
 mkdir -p xpm/cuda
 cp ../../../src/Cuda/*.cu xpm/cuda/
 cp /usr/lib/gcc/x86_64-w64-mingw32/7.3-posix/libgcc_s_seh-1.dll .
 cp /usr/lib/gcc/x86_64-w64-mingw32/7.3-posix/libstdc++-6.dll .
 cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll .
-cp /home/user/install/x86_64-w64-mingw32/lib/libcurl.dll.a libcurl.dll
-cp /home/user/install/x86_64-w64-mingw32/lib/libcrypto.dll.a libcrypto.dll
 cp /usr/local/cuda-win32/bin/nvrtc64_112_0.dll ./
-cp /usr/local/cuda-win32/bin/nvrtc-builtins64_113.dll ./
+cp /home/user/install/x86_64-w64-mingw32/bin/libcurl-4.dll ./
+cp /home/user/install/x86_64-w64-mingw32/bin/libeay32.dll ./
+echo ".\miner.exe --url primea.primecoin.org:9912 --user primecoinrpc --pass PASSWORD   --wallet AbMXJscCQUP28rySq8NYorqHouEo5zF8eH" > xpmminernv.bat
+
 cd ..
 
 zip -9 -r xpmminer-cuda-$VERSION-win64.zip xpmminer-cuda-$VERSION-win64

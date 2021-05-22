@@ -3,7 +3,7 @@ set -e
 VERSION="10.5-beta2"
 
 
-CUDA10_INSTALLER="cuda_11.3.0_465.89_win10.exe"
+CUDA10_INSTALLER="cuda_11.2.0_460.89_win10.exe"
 
 if docker inspect --type=image xpmclient-$VERSION > /dev/null 2> /dev/null; then
   echo "xpmclient-$VERSION image already exists"
@@ -81,4 +81,4 @@ docker exec $CONTAINER /home/user/build/build.sh
 # Grab artifacts
 rm -rf distr && mkdir distr && cd distr
 docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-Linux/xpmminer-cuda-$VERSION-linux.tar.gz .
-docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-w64-mingw32/xpmminer-cuda-$VERSION-win64.zip .
+docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-w64-mingw32/Cuda/xpmminer-cuda-$VERSION-win64.zip .
