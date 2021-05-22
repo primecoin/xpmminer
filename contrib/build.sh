@@ -151,5 +151,9 @@ cd ..
 zip -9 -r xpmminer-cuda-$VERSION-win64.zip xpmminer-cuda-$VERSION-win64
 # Calculate SHA256 checksum
 cd /home/user/build/xpmminer
+if [ -f /home/user/build/xpmminer/x86_64-Linux/xpmminer-cuda-$VERSION-linux.tar.gz ]; then
 sha256sum /home/user/build/xpmminer/x86_64-Linux/xpmminer-cuda-$VERSION-linux.tar.gz >> xpmminer-$VERSION-sha256.txt
+fi
+if [ -f /home/user/build/xpmminer/x86_64-w64-mingw32/xpmminer-cuda-$VERSION-win64.zip ]; then
 sha256sum /home/user/build/xpmminer/x86_64-w64-mingw32/xpmminer-cuda-$VERSION-win64.zip >> xpmminer-$VERSION-sha256.txt
+fi
