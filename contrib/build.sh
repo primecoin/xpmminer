@@ -54,6 +54,13 @@ cmake ../src -DCMAKE_BUILD_TYPE=Release \
   -DBUILDOPENCLMINER=OFF
 make -j`nproc`
 
+# make CPU distr
+mkdir xpmminer-cpu-$VERSION-linux
+cd xpmminer-cpu-$VERSION-linux
+cp ../CPU/xpmcpuminer ./xpmcpuminer
+cd ..
+tar -czf xpmminer-cpu-$VERSION-linux.tar.gz xpmminer-cpu-$VERSION-linux
+
 # make NVidia distr
 mkdir xpmminer-cuda-$VERSION-linux
 cd xpmminer-cuda-$VERSION-linux
@@ -153,6 +160,9 @@ cd ..
 zip -9 -r xpmminer-cuda-$VERSION-win64.zip xpmminer-cuda-$VERSION-win64
 # Calculate SHA256 checksum
 cd /home/user/build/xpmminer
+if [ -f /home/user/build/xpmminer/x86_64-Linux/xpmminer-cpu-$VERSION-linux.tar.gz ]; then
+sha256sum /home/user/build/xpmminer/x86_64-Linux/xpmminer-cpu-$VERSION-linux.tar.gz >> xpmminer-$VERSION-sha256.txt
+fi
 if [ -f /home/user/build/xpmminer/x86_64-Linux/xpmminer-cuda-$VERSION-linux.tar.gz ]; then
 sha256sum /home/user/build/xpmminer/x86_64-Linux/xpmminer-cuda-$VERSION-linux.tar.gz >> xpmminer-$VERSION-sha256.txt
 fi

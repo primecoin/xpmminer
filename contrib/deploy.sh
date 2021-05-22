@@ -80,5 +80,6 @@ docker exec $CONTAINER /home/user/build/build.sh
 
 # Grab artifacts
 rm -rf distr && mkdir distr && cd distr
+docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-Linux/xpmminer-cpu-$VERSION-linux.tar.gz .
 docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-Linux/xpmminer-cuda-$VERSION-linux.tar.gz .
 docker cp $CONTAINER:/home/user/build/xpmminer/x86_64-w64-mingw32/Cuda/xpmminer-cuda-$VERSION-win64.zip .
