@@ -57,7 +57,9 @@ make -j`nproc`
 # make CPU distr
 mkdir xpmminer-cpu-$VERSION-linux
 cd xpmminer-cpu-$VERSION-linux
-cp ../CPU/xpmcpuminer ./xpmcpuminer
+cp ../CPU/xpmcpuminer ./miner
+echo "./miner --url primea.primecoin.org:9912 --user primecoinrpc --pass PASSWORD   --wallet AbMXJscCQUP28rySq8NYorqHouEo5zF8eH" >> xpmminercpu
+chmod +x xpmminercpu
 cd ..
 tar -czf xpmminer-cpu-$VERSION-linux.tar.gz xpmminer-cpu-$VERSION-linux
 
