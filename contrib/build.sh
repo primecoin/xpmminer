@@ -58,7 +58,7 @@ make -j`nproc`
 mkdir xpmminer-cpu-$VERSION-linux
 cd xpmminer-cpu-$VERSION-linux
 cp ../CPU/xpmcpuminer ./miner
-echo "./miner --url dalia.primecoin.org:9915/api/jsonrpc --user NO --pass NO   --wallet yourxpmaddress" >> xpmminercpu
+echo "./miner --url appalachians.primecoin.org:9915/api/jsonrpc --user NO --pass NO   --wallet yourxpmaddress" >> xpmminercpu
 chmod +x xpmminercpu
 cd ..
 tar -czf xpmminer-cpu-$VERSION-linux.tar.gz xpmminer-cpu-$VERSION-linux
@@ -69,7 +69,7 @@ cd xpmminer-cuda-$VERSION-linux
 cp ../Cuda/xpmcuda ./miner
 echo "#/bin/bash" > xpmminernv
 echo "DIR=\$(dirname \"\$0\")" >> xpmminernv
-echo "LD_LIBRARY_PATH=\$DIR/. ./miner --url dalia.primecoin.org:9915/api/jsonrpc --user NO --pass NO   --wallet yourxpmaddress" >> xpmminernv
+echo "LD_LIBRARY_PATH=\$DIR/. ./miner --url appalachians.primecoin.org:9915/api/jsonrpc --user NO --pass NO   --wallet yourxpmaddress" >> xpmminernv
 chmod +x xpmminernv
 mkdir -p xpm/cuda
 cp ../../src/Cuda/*.cu xpm/cuda
@@ -155,7 +155,7 @@ cp /usr/local/cuda-win32/bin/nvrtc64_112_0.dll ./
 cp /usr/local/cuda-win32/bin/nvrtc-builtins64_112.dll .
 cp /home/user/install/x86_64-w64-mingw32/bin/libcurl-4.dll ./
 cp /home/user/install/x86_64-w64-mingw32/bin/libeay32.dll ./
-echo ".\miner.exe --url dalia.primecoin.org:9915/api/jsonrpc --user NO --pass NO   --wallet yourxpmaddress" > xpmminernv.bat
+echo ".\miner.exe --url appalachians.primecoin.org:9915/api/jsonrpc --user NO --pass NO   --wallet yourxpmaddress" > xpmminernv.bat
 
 cd ..
 
