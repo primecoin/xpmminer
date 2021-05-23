@@ -28,7 +28,7 @@ method 1
 for other options, see --help
 
 method 2
-A rpc has been set up, `dalia.primecoin.org:9915/api/jsonrpc`
+A rpc has been set up, `appalachians.primecoin.org:9915/api/jsonrpc`
 Modify xpmminercpu (in linux cpu) / xpmminernv (in linux NVidia) / xpmminernv.bat (in windows NVidia)
 by replacing the xpm address with your wallet address.
 Then run these files. For example, in windows, run `.\xpmminernv.bat` in power shell.
