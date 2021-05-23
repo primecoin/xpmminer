@@ -18,18 +18,20 @@ in linux see contrib/README.md
 
 4 Usage
 
+method 1
 - Run official primecoin client with RPC support. Examples:<BR>
   primecoind -rpcuser=userName -rpcpassword=password<BR>
   primecoin-qt -rpcuser=userName -rpcpassword=password -server<BR>
   
 - Run CPU or GPU miner,
-method 1
 ./miner --url RPCaddress --user primecoinrpc --pass PASSWORD   --wallet youaddress
 for other options, see --help
 
 method 2
-modify xpmminercpu (in linux cpu) / xpmminernv (in linux NVidia) / xpmminernv.bat (in windows NVidia)
-use you RPC address, rpcuser, rpcpassword and you wallet address to replace the corresponding contents. Then run these files. For example, in windows, run `.\xpmminernv.bat` in power shell.
+A rpc has been set up, `dalia.primecoin.org:9915/api/jsonrpc`
+Modify xpmminercpu (in linux cpu) / xpmminernv (in linux NVidia) / xpmminernv.bat (in windows NVidia)
+by replacing the address with your wallet address.
+Then run these files. For example, in windows, run `.\xpmminernv.bat` in power shell.
 
 
 5 Donations
