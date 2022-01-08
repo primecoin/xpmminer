@@ -998,16 +998,10 @@ int main(int argc, char **argv) {
   }
 
   unsigned int sievePerRound = 5;
-  std::vector<std::thread> threads;
   for(unsigned i = 0; i < gpus.size(); ++i) {
       PrimeMiner* miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
       miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
       std::thread t(InvokeMining, miner, getblock, submit);
-      threads.push_back(t);
-  }
-
-  for (auto& t: threads) {
-      t.join();
   }
 
   return 0;
