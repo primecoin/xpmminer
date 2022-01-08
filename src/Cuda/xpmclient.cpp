@@ -24,6 +24,8 @@
 #include "prime.h"
 #include <openssl/bn.h>
 #include <openssl/sha.h>
+#include <thread>
+#include <mutex>
 
 void _blkmk_bin2hex(char *out, void *data, size_t datasz) {
   unsigned char *datac = (unsigned char *)data;
@@ -37,7 +39,7 @@ void _blkmk_bin2hex(char *out, void *data, size_t datasz) {
   }
 
 }
-
+std::mutex mtx;
 unsigned gDebug = 0;
 int gExtensionsNum = 9;
 int gPrimorial = 19;
@@ -378,12 +380,14 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     // get work
     bool reset = false;
     {
+      mtx.lock();
       while ( !(workTemplate = gbp->get(0, workTemplate, &dataId, &hasChanged)) )
         usleep(100);
       if(workTemplate && hasChanged){
         run = true;//ReceivePub(work, worksub);
         reset = true;
       }
+      mtx.unlock();
     }
     if(!run)
       break;
@@ -699,8 +703,9 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           BN_bn2mpi(xxx, buffer);
           work.multiplier[0] = buffer[3];
           std::reverse_copy(buffer+4, buffer+4+buffer[3], work.multiplier+1);
+          mtx.lock();
           submit->submitBlock(workTemplate, work, dataId);
-          
+          mtx.unlock();
           LOG_F(1, "GPU %d found share: %d-ch type %d", mID, chainlength, candi.type+1);
           if(isblock)
             LOG_F(1, "GPU %d found BLOCK!", mID);
@@ -813,6 +818,11 @@ void initCmdLineOptions(option *options)
   options[clWorkerId] = {"worker-id", required_argument, &extraNonce, 0};  
   options[clHelp] = {"help", no_argument, 0, 'h'};
   options[clOptionLast] = {0, 0, 0, 0};
+}
+
+void InvokeMining(PrimeMiner* miner, GetBlockTemplateContext* getblock, SubmitContext* submit)
+{
+      miner->Mining(getblock, submit);
 }
 
 int main(int argc, char **argv) {
@@ -988,10 +998,16 @@ int main(int argc, char **argv) {
   }
 
   unsigned int sievePerRound = 5;
+  std::vector<std::thread> threads;
   for(unsigned i = 0; i < gpus.size(); ++i) {
       PrimeMiner* miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
       miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
-      miner->Mining(getblock, submit);
+      std::thread t(InvokeMining, miner, getblock, submit);
+      threads.push_back(t);
+  }
+
+  for (auto& t: threads) {
+      t.join();
   }
 
   return 0;
