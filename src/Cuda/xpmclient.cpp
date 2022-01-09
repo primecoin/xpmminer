@@ -24,7 +24,6 @@
 #include "prime.h"
 #include <openssl/bn.h>
 #include <openssl/sha.h>
-#include <thread>
 #include <mutex>
 
 void _blkmk_bin2hex(char *out, void *data, size_t datasz) {
@@ -822,7 +821,7 @@ void initCmdLineOptions(option *options)
 
 void InvokeMining(PrimeMiner* miner, GetBlockTemplateContext* getblock, SubmitContext* submit)
 {
-      miner->Mining(getblock, submit);
+  miner->Mining(getblock, submit);
 }
 
 int main(int argc, char **argv) {
@@ -1001,7 +1000,8 @@ int main(int argc, char **argv) {
   for(unsigned i = 0; i < gpus.size(); ++i) {
       PrimeMiner* miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
       miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
-      std::thread t(InvokeMining, miner, getblock, submit);
+      pthread_t thread;
+      pthread_create(&thread, 0, InvokeMining, miner, getblock, submit);
   }
 
   return 0;
