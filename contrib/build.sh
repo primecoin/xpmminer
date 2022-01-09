@@ -78,7 +78,6 @@ cp /usr/local/cuda-11.2/lib64/libnvrtc-builtins.so.11.2 .
 cd ..
 tar -czf xpmminer-cuda-$VERSION-linux.tar.gz xpmminer-cuda-$VERSION-linux
 
-
 # win64 static build
 
 # gmp
