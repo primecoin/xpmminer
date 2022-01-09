@@ -288,7 +288,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   cudaBuffer<uint32_t> primeBuf[maxHashPrimorial];
   cudaBuffer<uint32_t> primeBuf2[maxHashPrimorial];
   
-  printf("----------------------------test print at line 291\n");
+  printf("-----+----------------------test print at line 291\n");
   CUevent sieveEvent;
   CUDA_SAFE_CALL(cuEventCreate(&sieveEvent, CU_EVENT_BLOCKING_SYNC));
   
@@ -1000,7 +1000,7 @@ int main(int argc, char **argv) {
 
   unsigned int sievePerRound = 5;
   MineContext *mineCtx = new MineContext[gpus.size()];
-  for(unsigned i = 0; i < 1; ++i) {
+  for(unsigned i = 0; i < gpus.size(); ++i) {
       pthread_t thread;
       mineCtx[i].gbp = getblock;
       mineCtx[i].submit = new SubmitContext(0, gUrl, gUserName, gPassword);
