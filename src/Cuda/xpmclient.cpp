@@ -1005,6 +1005,7 @@ int main(int argc, char **argv) {
       mineCtx[i].gbp = getblock;
       mineCtx[i].submit = new SubmitContext(0, gUrl, gUserName, gPassword);
       mineCtx[i].miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
+      mineCtx[i].miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
       pthread_create(&thread, 0, InvokeMining, &mineCtx[i]);
   }
 
