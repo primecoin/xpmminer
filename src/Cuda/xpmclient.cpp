@@ -24,7 +24,8 @@
 #include "prime.h"
 #include <openssl/bn.h>
 #include <openssl/sha.h>
-#include <mutex>
+#include <thread>
+
 void _blkmk_bin2hex(char *out, void *data, size_t datasz) {
   unsigned char *datac = (unsigned char *)data;
   static char hex[] = "0123456789abcdef";
@@ -37,7 +38,7 @@ void _blkmk_bin2hex(char *out, void *data, size_t datasz) {
   }
 
 }
-std::mutex mtx;
+
 unsigned gDebug = 0;
 int gExtensionsNum = 9;
 int gPrimorial = 19;
@@ -246,7 +247,6 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
 }
 
 void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
-  mtx.lock();
   cuCtxSetCurrent(_context);
   time_t starttime = time(0);
   unsigned int dataId;
@@ -934,7 +934,7 @@ int main(int argc, char **argv) {
   std::map<int,int> mDeviceMap;
   std::map<int,int> mDeviceMapRev;
 
-  for (unsigned i = 0; i < devicesNum; i++) {
+  for (unsigned i = 0; i < 1; i++) {
       char name[128];
       CUDADeviceInfo info;
       mDeviceMap[i] = gpus.size();
