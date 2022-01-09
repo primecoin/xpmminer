@@ -820,11 +820,14 @@ struct MineContext {
   GetBlockTemplateContext *gbp;
   SubmitContext *submit;
   PrimeMiner* miner;
+  CUDADeviceInfo *device;
+  CUmodule *mod;
 };
 
 void* InvokeMining(void *arg)
 {
   MineContext *ctx = (MineContext*)arg;
+  ctx->miner->Initialize(ctx->device->context, ctx->device->device, *(ctx->mod));
   ctx->miner->Mining(ctx->gbp, ctx->submit);
 }
 
@@ -898,8 +901,8 @@ int main(int argc, char **argv) {
     exit(1);
   }
   printf("block sum is %d\n", gThreadsNum);
-  GetBlockTemplateContext* getblock = new GetBlockTemplateContext(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
-  getblock->run();
+  GetBlockTemplateContext getblock(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
+  getblock.run();
   blktemplate_t *workTemplate = 0;
   unsigned int dataId;
   bool hasChanged;
@@ -1002,10 +1005,11 @@ int main(int argc, char **argv) {
   MineContext *mineCtx = new MineContext[gpus.size()];
   for(unsigned i = 0; i < gpus.size(); ++i) {
       pthread_t thread;
-      mineCtx[i].gbp = getblock;
+      mineCtx[i].gbp = &getblock;
       mineCtx[i].submit = new SubmitContext(0, gUrl, gUserName, gPassword);
       mineCtx[i].miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
-      mineCtx[i].miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
+      mineCtx[i].device = &gpus[i];
+      mineCtx[i].mod = &modules[i];
       pthread_create(&thread, 0, InvokeMining, &mineCtx[i]);
   }
 
