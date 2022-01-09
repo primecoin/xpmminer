@@ -15,6 +15,7 @@ include_directories(
   ${OPENSSL_INCLUDE_DIR}
   ${JANSSON_INCLUDE_DIRECTORY}
   ${CURL_INCLUDE_DIRECTORY}
+  ${OPENCL_INCLUDE_DIRS}
 )
 
 add_executable(xpmclminer

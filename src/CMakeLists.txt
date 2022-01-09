@@ -56,7 +56,6 @@ include_directories(
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_BINARY_DIR}/include
   ${CMAKE_SOURCE_DIR}/blkmaker
-  ${OPENCL_INCLUDE_DIRS}
 )
 
 add_subdirectory(blkmaker)
