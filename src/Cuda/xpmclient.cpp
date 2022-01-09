@@ -378,14 +378,12 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     // get work
     bool reset = false;
     {
-      mtx.lock();
       while ( !(workTemplate = gbp->get(0, workTemplate, &dataId, &hasChanged)) )
         usleep(100);
       if(workTemplate && hasChanged){
         run = true;//ReceivePub(work, worksub);
         reset = true;
       }
-      mtx.unlock();
     }
     if(!run)
       break;
@@ -701,9 +699,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           BN_bn2mpi(xxx, buffer);
           work.multiplier[0] = buffer[3];
           std::reverse_copy(buffer+4, buffer+4+buffer[3], work.multiplier+1);
-          mtx.lock();
           submit->submitBlock(workTemplate, work, dataId);
-          mtx.unlock();
           LOG_F(1, "GPU %d found share: %d-ch type %d", mID, chainlength, candi.type+1);
           if(isblock)
             LOG_F(1, "GPU %d found BLOCK!", mID);
@@ -824,10 +820,10 @@ struct MineContext {
   PrimeMiner* miner;
 };
 
-void InvokeMining(void *arg)
+void* InvokeMining(void *arg)
 {
   MineContext *ctx = (MineContext*)arg;
-  ctx.iner->Mining(ctx.gbp, tx.submit);
+  ctx->miner->Mining(ctx->gbp, ctx->submit);
 }
 
 int main(int argc, char **argv) {
@@ -1004,7 +1000,7 @@ int main(int argc, char **argv) {
   MineContext *mineCtx = new MineContext[gpus.size()];
   for(unsigned i = 0; i < gpus.size(); ++i) {
       pthread_t thread;
-      mineCtx[i].gbp = &getblock;
+      mineCtx[i].gbp = getblock;
       mineCtx[i].submit = new SubmitContext(0, gUrl, gUserName, gPassword);
       mineCtx[i].miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
       pthread_create(&thread, 0, InvokeMining, &mineCtx[i]);
