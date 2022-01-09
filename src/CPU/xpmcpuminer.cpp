@@ -509,10 +509,10 @@ int main(int argc, char **argv)
       speed += mineCtx[i].speed;
       averageSpeed += threadAvgSpeed;
 
-      printf("    [%u] %.3lfG, average: %.3lfG\n", i+1, mineCtx[i].speed, threadAvgSpeed);
+      printf("    [thread %u] %.3lfG, average: %.3lfG\n", i+1, mineCtx[i].speed, threadAvgSpeed);
     }
 
-    printf(" ** speed: %.3lfG, average: %.3lfG\n", speed, averageSpeed);
+    printf(" ** total speed: %.3lfG, average: %.3lfG\n", speed, averageSpeed);
     unsigned chIdx;
     for (chIdx = 1; chIdx < MaxChainLength && foundChains[chIdx]; chIdx++) {
       printf("   * chains/%u: %llu %.3lf/sec ",
