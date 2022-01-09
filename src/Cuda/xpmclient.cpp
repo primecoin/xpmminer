@@ -24,7 +24,6 @@
 #include "prime.h"
 #include <openssl/bn.h>
 #include <openssl/sha.h>
-#include <mutex>
 
 void _blkmk_bin2hex(char *out, void *data, size_t datasz) {
   unsigned char *datac = (unsigned char *)data;
@@ -38,7 +37,7 @@ void _blkmk_bin2hex(char *out, void *data, size_t datasz) {
   }
 
 }
-std::mutex mtx;
+
 unsigned gDebug = 0;
 int gExtensionsNum = 9;
 int gPrimorial = 19;
@@ -819,9 +818,16 @@ void initCmdLineOptions(option *options)
   options[clOptionLast] = {0, 0, 0, 0};
 }
 
-void InvokeMining(PrimeMiner* miner, GetBlockTemplateContext* getblock, SubmitContext* submit)
+struct MineContext {
+  GetBlockTemplateContext *gbp;
+  SubmitContext *submit;
+  PrimeMiner* miner;
+};
+
+void InvokeMining(void *arg)
 {
-  miner->Mining(getblock, submit);
+  MineContext *ctx = (MineContext*)arg;
+  ctx.iner->Mining(ctx.gbp, tx.submit);
 }
 
 int main(int argc, char **argv) {
@@ -905,8 +911,6 @@ int main(int argc, char **argv) {
   //}
   //printf("blocktemplate_rwrqwrqw %ld\n", (long int)workTemplate);
   //printf("block height %d\n", workTemplate->height);
-  
-  SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
 
   {
     int np = sizeof(gPrimes)/sizeof(unsigned);
@@ -997,11 +1001,13 @@ int main(int argc, char **argv) {
   }
 
   unsigned int sievePerRound = 5;
+  MineContext *mineCtx = new MineContext[gpus.size()];
   for(unsigned i = 0; i < gpus.size(); ++i) {
-      PrimeMiner* miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
-      miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
       pthread_t thread;
-      pthread_create(&thread, 0, InvokeMining, miner, getblock, submit);
+      mineCtx[i].gbp = &getblock;
+      mineCtx[i].submit = new SubmitContext(0, gUrl, gUserName, gPassword);
+      mineCtx[i].miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
+      pthread_create(&thread, 0, InvokeMining, &mineCtx[i]);
   }
 
   return 0;
