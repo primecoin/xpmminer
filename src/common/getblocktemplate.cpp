@@ -151,10 +151,11 @@ void GetBlockTemplateContext::queryWork()
   
   while (1) {
     _response.clear();
+    long code;
     if (curl_easy_perform(curl) != CURLE_OK) {
-      logFormattedWrite(_log, "block receiving error!");
+      if (curl_easy_getinfo(curl, CURLINFO_OS_ERRNO, &code) == CURLE_OK)
+        fprintf(stderr, "\e[1;33m[SOCK ERROR] %ld\e[0m\n", code);
     } else {
-      long code;
       if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code) == CURLE_OK && code != 200) {
         fprintf(stderr, "\e[1;33m[HTTP ERROR] %ld\e[0m\n", code);
       }
