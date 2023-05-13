@@ -63,7 +63,7 @@ void GetBlockTemplateContext::updateWork()
   json_t *response = json_loads(_response.c_str(), 0, &jsonError);
   json_t *je;
   if (!response || ((je = json_object_get(response, "error")) && !json_is_null(je))) {
-    fprintf(stderr, "\e[1;33m[RPC ERROR] %s\e[0m\n", _response.c_str());
+    fprintf(stderr, "\e[1;33m[JRPC ERROR] %s\e[0m\n", _response.c_str());
     return;
   }
   
@@ -154,6 +154,10 @@ void GetBlockTemplateContext::queryWork()
     if (curl_easy_perform(curl) != CURLE_OK) {
       logFormattedWrite(_log, "block receiving error!");
     } else {
+      long code;
+      if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code) == CURLE_OK && code != 200) {
+        fprintf(stderr, "\e[1;33m[HTTP ERROR] %ld\e[0m\n", code);
+      }
       updateWork();
     }
     
