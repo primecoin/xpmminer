@@ -61,10 +61,9 @@ void GetBlockTemplateContext::updateWork()
   const char *error;  
   json_error_t jsonError;
   json_t *response = json_loads(_response.c_str(), 0, &jsonError);
-  if (!response) {
-    logFormattedWrite(_log,
-                      "getblocktemplate response JSON parsing error: %s",
-                      _response.c_str());   
+  json_t *je;
+  if (!response || ((je = json_object_get(response, "error")) && !json_is_null(je))) {
+    fprintf(stderr, "\e[1;33m[RPC ERROR] %s\e[0m\n", _response.c_str());
     return;
   }
   
