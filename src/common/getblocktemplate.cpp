@@ -248,10 +248,23 @@ void SubmitContext::submitBlock(blktemplate_t *blockTemplate,
   _response.clear();
   logFormattedWrite(_log, "submit request: %s", request);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request);
+  long code;
   if (curl_easy_perform(curl) != CURLE_OK) {
-    logFormattedWrite(_log, "block send error!!!");
+    if (curl_easy_getinfo(curl, CURLINFO_OS_ERRNO, &code) == CURLE_OK)
+      fprintf(stderr, "\e[1;31m[SOCK ERROR] %ld\e[0m\n", code);
   } else {
-    logFormattedWrite(_log, "response: %s");
+    if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code) == CURLE_OK && code != 200) {
+      fprintf(stderr, "\e[1;31m[HTTP ERROR] %ld\e[0m\n", code);
+    }
+    json_error_t jsonError;
+    json_t *response = json_loads(_response.c_str(), 0, &jsonError);
+    json_t *je;
+    if (!response || ((je = json_object_get(response, "error")) && !json_is_null(je)))
+      fprintf(stderr, "\e[1;31m[JRPC ERROR] %s\e[0m\n", _response.c_str());
+    else if ((je = json_object_get(response, "result")) && json_is_null(je))
+      fprintf(stdout, "\e[1;32m[RPC SUBMIT] %s\e[0m\n", _response.c_str());
+    else
+      fprintf(stdout, "\e[1;33m[RPC SUBMIT] %s\e[0m\n", _response.c_str());
   }
   
   free(request);
