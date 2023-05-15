@@ -324,6 +324,7 @@ void *mine(void *arg)
                                    ctx->foundChains)) {
       logFormattedWrite(ctx->log, "block found!");
       ctx->submit->submitBlock(workTemplate, work, dataId);
+      xsleep(5); // wait a bit for getblocktemplate to find our new block
     }
       
     roundsNum++;
