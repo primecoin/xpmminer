@@ -24,7 +24,7 @@
 #include "private.h"
 
 #ifndef JSON_INTEGER_IS_LONG_LONG
-#	error "Jansson 2.0 with long long support required!"
+#	warning "Jansson 2.0 with long long support required!" // JSON_INTEGER_IS_LONG_LONG not set on nixos for some reason, use warning instead of error as workaround
 #endif
 
 json_t *blktmpl_request_jansson(gbt_capabilities_t caps, const char *lpid) {
