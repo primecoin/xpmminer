@@ -1,2 +1,5 @@
 build
 .vscode
+
+# nix build
+result/
