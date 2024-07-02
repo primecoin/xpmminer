@@ -39,8 +39,6 @@
             make
           '';
           installPhase = ''
-            mkdir -p $out
-            cp -r target $out
           '';
         };
       }
