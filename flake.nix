@@ -30,15 +30,21 @@
 
         packages.default = pkgs.stdenv.mkDerivation {
           name = "xpmminer-nixos-builder-with-cmake";
-          src = ./.;
-          buildInputs = [ ncurses cmake curl jansson openssl gmp gcc gnumake ];
-          buildPhase = ''
-            mkdir -p build
-            cd build
-            cmake -DCMAKE_BUILD_TYPE=Release -DBUILDOPENCLMINER=OFF -DBUILDCUDAMINER=OFF ../src
-            make
-          '';
+          src = ./src;
+          nativeBuildInputs = [ cmake ];
+          buildInputs = [ ncurses curl jansson openssl gmp gcc gnumake ];
+          
+          cmakeFlags = [
+            "-DCMAKE_BUILD_TYPE=Release"
+            "-DBUILDOPENCLMINER=OFF"
+            "-DBUILDCUDAMINER=OFF"
+          ];
+
+          enableParallelBuilding = true;
+          
           installPhase = ''
+            mkdir -p $out
+            cp -r * $out/
           '';
         };
       }
