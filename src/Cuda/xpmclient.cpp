@@ -874,12 +874,7 @@ int main(int argc, char **argv) {
             break;
     }
   }
-  
-  if ((!gUserName || !gPassword) && !isBenchmark) {
-    fprintf(stderr, "Error: you must specify user name and password\n");
-    exit(1);
-  }
-  
+
   if (!gWallet && !isBenchmark) {
     fprintf(stderr, "Error: you must specify wallet\n");
     exit(1);
