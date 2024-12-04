@@ -1,0 +1,2 @@
+/nix/store/ac1hb5dc2z4biwgy8mjrhlifffkkrvdq-gcc-wrapper-13.2.0/bin/ar qc libblkmaker.a CMakeFiles/blkmaker.dir/base58.c.o CMakeFiles/blkmaker.dir/blkmaker.c.o CMakeFiles/blkmaker.dir/blkmaker_jansson.c.o CMakeFiles/blkmaker.dir/blktemplate.c.o CMakeFiles/blkmaker.dir/hex.c.o
+/nix/store/ac1hb5dc2z4biwgy8mjrhlifffkkrvdq-gcc-wrapper-13.2.0/bin/ranlib libblkmaker.a

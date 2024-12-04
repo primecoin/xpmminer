@@ -1,0 +1,1 @@
+/nix/store/ac1hb5dc2z4biwgy8mjrhlifffkkrvdq-gcc-wrapper-13.2.0/bin/g++  -std=c++0x -O3 -DNDEBUG -rdynamic CMakeFiles/xpmcpuminer.dir/xpmcpuminer.cpp.o CMakeFiles/xpmcpuminer.dir/rippedFromHp.cpp.o -o xpmcpuminer  ../common/libcommon.a ../blkmaker/libblkmaker.a -lgmp -lgmpxx -lcrypto -lssl -lcurl -ljansson -lpthread -ldl 
