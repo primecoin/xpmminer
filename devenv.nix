@@ -1,7 +1,7 @@
 { pkgs, lib, ... }: {
   languages.c.enable = true;
 
-  # 引入所有必要的构建工具和依赖
+  #Introduce all necessary build tools and dependencies
   packages = [
     pkgs.cmake
     pkgs.ceedling
@@ -13,8 +13,7 @@
     pkgs.gcc
     pkgs.gnumake
   ];
-
-  # 使用 mkForce 解决 shell 定义冲突
+  #Use mkForce to resolve shell definition conflicts
   shell = lib.mkForce (pkgs.mkShell {
     buildInputs = [
       pkgs.cmake
@@ -28,7 +27,7 @@
       pkgs.gnumake
     ];
 
-    # 在 shell 启动时执行的命令
+    # Commands executer when the shell starts
     shellHook = ''
       echo "Initializing cmake build in src directory..."
       mkdir -p build
@@ -39,7 +38,6 @@
     '';
   });
 
-  # git hooks 配置（保持你的原始配置）
   git-hooks.excludes = [ ".devenv" ];
   git-hooks.hooks = {
     clang-tidy.enable = true;
