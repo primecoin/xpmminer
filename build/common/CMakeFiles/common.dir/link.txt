@@ -1,2 +1,0 @@
-/nix/store/ac1hb5dc2z4biwgy8mjrhlifffkkrvdq-gcc-wrapper-13.2.0/bin/ar qc libcommon.a CMakeFiles/common.dir/CSieveOfEratosthenesL1Ext.cpp.o CMakeFiles/common.dir/getblocktemplate.cpp.o CMakeFiles/common.dir/primecoin.cpp.o CMakeFiles/common.dir/system.cpp.o
-/nix/store/ac1hb5dc2z4biwgy8mjrhlifffkkrvdq-gcc-wrapper-13.2.0/bin/ranlib libcommon.a
