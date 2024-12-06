@@ -31,6 +31,7 @@
     # Commands executed when the shell starts
     shellHook = ''
       echo "Initializing cmake build in src directory..."
+<<<<<<< HEAD
       mkdir build && cd build 
       cmake -DCMAKE_BUILD_TYPE=Release -DBUILDOPENCLMINER=OFF -DBUILDCUDAMINER=OFF ../src
       make
@@ -41,8 +42,22 @@
     '';
   });
   
+=======
+      mkdir -p build
+      cd build
+      cmake -DCMAKE_BUILD_TYPE=Release -DBUILDOPENCLMINER=OFF -DBUILDCUDAMINER=OFF ../src
+      make
+      echo "Build complete. You can find the results in the 'build' directory."
+    '';
+  });
+
+>>>>>>> upstream/master
   git-hooks.excludes = [ ".devenv" ];
   git-hooks.hooks = {
     clang-tidy.enable = true;
   };
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> upstream/master

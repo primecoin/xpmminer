@@ -3,3 +3,4 @@ build
 
 # nix build
 result/
+.devenv/
