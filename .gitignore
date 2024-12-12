@@ -3,3 +3,13 @@ build
 
 # nix build
 result/
+.devenv/
+# Devenv
+.devenv*
+devenv.local.nix
+
+# direnv
+.direnv
+.envrc
+# pre-commit
+.pre-commit-config.yaml

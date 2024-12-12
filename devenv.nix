@@ -1,47 +1,31 @@
 { pkgs, lib, ... }: {
   languages.c.enable = true;
 
-  # Introduce all necessary build tools and dependencies
+  # 引入所有必要的构建工具和依赖项
   packages = [
     pkgs.cmake
-    pkgs.ceedling
     pkgs.ncurses
     pkgs.curl
     pkgs.jansson
     pkgs.openssl
-    pkgs.gmp5
-    pkgs.gcc
+    pkgs.gmp
+    pkgs.gmpxx
+    pkgs.gcc10
     pkgs.gnumake
+    pkgs.wget
+    pkgs.gcc10Stdenv
+    pkgs.cudaPackages_11_3.cudatoolkit
+    pkgs.clinfo
+    pkgs.cudaPackages.cuda_opencl
+    pkgs.stdenv.cc.cc.lib
   ];
 
-  # Use mkForce to resolve shell definition conflicts
-  shell = lib.mkForce (pkgs.mkShell {
-    buildInputs = [
-      pkgs.cmake
-      pkgs.ceedling
-      pkgs.ncurses
-      pkgs.curl
-      pkgs.jansson
-      pkgs.openssl
-      pkgs.gmp5
-      pkgs.gcc
-      pkgs.gnumake
-    ];
-
-    # Commands executed when the shell starts
-    shellHook = ''
-      echo "Initializing cmake build in src directory..."
-      mkdir -p build
-      cd build
-      cmake -DCMAKE_BUILD_TYPE=Release -DBUILDOPENCLMINER=OFF -DBUILDCUDAMINER=OFF ../src
-      make
-      echo "Build complete. You can find the results in the 'build' directory."
-    '';
-  });
-
-  git-hooks.excludes = [ ".devenv" ];
-  git-hooks.hooks = {
-    clang-tidy.enable = true;
+  env = {
+    CC = "gcc";
+    CXX = "g++";
+    CXXFLAGS = "-std=c++11";
+    CUDA_PATH = "${pkgs.cudaPackages_11_3.cudatoolkit}";
+    OPENCL_PATH = "${pkgs.cudaPackages.cuda_opencl}";
   };
 }
 
