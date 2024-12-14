@@ -428,7 +428,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
 
     // hashmod fetch & dispatch
     {
-       printf("got %d new hashes\n", hashmod.count[0]);
       fflush(stdout);
       for(unsigned i = 0; i < hashmod.count[0]; ++i) {
         hash_t hash;
@@ -816,6 +815,20 @@ void initCmdLineOptions(option *options)
 }
 
 int main(int argc, char **argv) {
+  char logFileName[64];
+  {
+    auto t = std::time(nullptr);
+    auto now = std::localtime(&t);
+    snprintf(logFileName, sizeof(logFileName), "miner-%04u-%02u-%02u.log", now->tm_year + 1900, now->tm_mon + 1, now->tm_mday);
+  }
+  loguru::g_stderr_verbosity = loguru::Verbosity_OFF;
+  loguru::g_preamble_thread = false;
+  loguru::g_preamble_file = false;
+  loguru::g_flush_interval_ms = 100;
+  loguru::init(argc, argv);
+  loguru::add_file(logFileName, loguru::Append, loguru::Verbosity_INFO);
+  loguru::g_stderr_verbosity = 1;
+
   srand(time(0));  
   blkmk_sha256_impl = sha256;
   PrimeSource primeSource(10000000, gWeaveDepth+256);
