@@ -4,11 +4,15 @@
 #include "system.h"
 #include "rippedFromHp.h"
 #include "Debug.h"
+#include "ripped.h"
 
 #include <getopt.h>
 #include <memory>
 #include <set>
 #include <stdlib.h>
+#include <cstdio>  // For snprintf
+#include <string>  // For std::string
+#include <algorithm>  // For std::min
 
 unsigned gDebug = 0;
 int gExtensionsNum = 9;
@@ -267,6 +271,27 @@ struct MineContext {
   void *log;
 };
 
+
+unsigned int TargetGetFractional(unsigned int nBits)
+{
+    return (nBits & TARGET_FRACTIONAL_MASK);
+}
+
+std::string TargetToString(unsigned int nBits)
+{
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%02x.%06x", TargetGetLength(nBits), TargetGetFractional(nBits));
+    return std::string(buffer);
+}
+
+std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength)
+{
+    const std::string strLabels[5] = {"NUL", "1CC", "2CC", "TWN", "UNK"};
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 4u)].c_str(), TargetToString(nChainLength).c_str());
+    return std::string(buffer);
+}
+
 void *mine(void *arg)
 {
   MineContext *ctx = (MineContext*)arg;
@@ -323,6 +348,17 @@ void *mine(void *arg)
                                    *ctx->primeSource,
                                    ctx->foundChains)) {
       logFormattedWrite(ctx->log, "block found!");
+      unsigned multiplier;
+      unsigned candidateType;
+      
+      sieve->GetNextCandidateMultiplier(multiplier, candidateType); 
+
+      // Gets the name of the chain
+      std::string chainName = GetPrimeChainName(candidateType, probableChainLength);
+
+      printf("Candidate chain found: %s\n", chainName.c_str());
+        
+      
       ctx->submit->submitBlock(workTemplate, work, dataId);
       xsleep(5); // wait a bit for getblocktemplate to find our new block
     }
