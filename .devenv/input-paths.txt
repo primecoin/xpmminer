@@ -1,0 +1,2 @@
+/opt/xpmminer/devenv.lock
+/opt/xpmminer/devenv.nix
