@@ -4,7 +4,6 @@
 #include "system.h"
 #include "rippedFromHp.h"
 #include "Debug.h"
-#include "ripped.h"
 
 #include <getopt.h>
 #include <memory>
@@ -285,6 +284,7 @@ std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength
  const std::string strLabels[5] = {"NUL", "1CC", "2CC", "TWN", "UNK"};
  char buffer[64];
  std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 4u)].c_str(), TargetToString(nChainLength).c_str());
+ fprintf(stderr, "Generated chain type: %s with length: %u\n", strLabels[std::min(nChainType, 4u)].c_str(), nChainLength);
  return std::string(buffer);
 }
 
@@ -343,6 +343,7 @@ void *mine(void *arg)
                                    testParams,
                                    *ctx->primeSource,
                                    ctx->foundChains)) {
+      printf("Candidate type: %u\n", testParams.candidateType);
       std::string chainName = GetPrimeChainName(testParams.candidateType, testParams.chainLength);
       printf("Prime chain: %s\n", chainName.c_str());
       logFormattedWrite(ctx->log, "block found!");
