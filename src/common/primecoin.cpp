@@ -16,7 +16,6 @@ extern unsigned gDebug;
 extern unsigned gSieveSize;
 extern unsigned gWeaveDepth;
 
-
 uint32_t bitsFromDifficulty(double difficulty)
 {
   uint32_t chainLength = (uint32_t)difficulty;

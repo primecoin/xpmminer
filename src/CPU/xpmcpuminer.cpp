@@ -343,9 +343,9 @@ void *mine(void *arg)
                                    testParams,
                                    *ctx->primeSource,
                                    ctx->foundChains)) {
-      printf("Candidate type: %u\n", testParams.candidateType);
       std::string chainName = GetPrimeChainName(testParams.candidateType, testParams.chainLength);
-      printf("Prime chain: %s\n", chainName.c_str());
+      std::string logMessage = "Prime chain: " + chainName; 
+      logFormattedWrite(ctx->log, logMessage.c_str());
       logFormattedWrite(ctx->log, "block found!");
       ctx->submit->submitBlock(workTemplate, work, dataId);
       xsleep(5); // wait a bit for getblocktemplate to find our new block
