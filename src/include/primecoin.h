@@ -173,4 +173,8 @@ bool updateBlock(PrimecoinBlockHeader *header,
                  CPrimalityTestParams &testParams,
                  unsigned nonceIncrement = 1);
 
+bool ProbablePrimeChainTest(const mpz_class &bnChainOrigin, unsigned int nBits, bool fFermatTest, unsigned int &nChainLengthCunningham1, unsigned int &nChainLengthCunningham2, unsigned int &nChainLengthBiTwin);
+
+void TargetIncrementLength(unsigned int &nBits);
+
 #endif //__PRIMECOIN_H_

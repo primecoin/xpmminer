@@ -1,6 +1,7 @@
 #include "CSieveOfEratosthenesL1Ext.h"
 #include "primecoin.h"
 #include "system.h"
+#include "../CPU/ripped.h"
 
 #include <stdlib.h>
 #include <time.h>
@@ -14,6 +15,7 @@
 extern unsigned gDebug;
 extern unsigned gSieveSize;
 extern unsigned gWeaveDepth;
+
 
 uint32_t bitsFromDifficulty(double difficulty)
 {
@@ -288,6 +290,34 @@ bool FermatProbablePrimalityTestFast(const mpz_class &n,
   return false;
 }
 
+static bool FermatProbablePrimalityTest(const mpz_class &n, unsigned int &nLength)
+{
+    mpz_class a = 2; // Base
+    mpz_class e = n - 1;
+    mpz_class r;
+
+    // Perform modular exponentiation: r = a^e mod n
+    mpz_powm(r.get_mpz_t(), a.get_mpz_t(), e.get_mpz_t(), n.get_mpz_t());
+
+    if (r == 1) {
+        return true;
+    }
+
+    // Calculate fractional length
+    unsigned int nFractionalBits = 16; // Define this constant globally if reused
+    mpz_class temp = n - r;
+    mpz_mul_2exp(temp.get_mpz_t(), temp.get_mpz_t(), nFractionalBits);
+    mpz_class nFractionalLength = temp / n;
+
+    if (nFractionalLength >= (1u << nFractionalBits)) {
+        printf("FermatProbablePrimalityTest() : fractional assert");
+        return false;
+    }
+
+    nLength = (nLength & TARGET_LENGTH_MASK) | nFractionalLength.get_ui();
+    return false;
+}
+
 static bool EulerLagrangeLifchitzPrimalityTestFast(const mpz_class& n,
                                                    bool fSophieGermain,
                                                    unsigned int& nLength,
@@ -481,6 +511,26 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
     bnChainOrigin = hashMultiplier;
     bnChainOrigin *= nTriedMultiplier;
     nChainLength = 0;
+    unsigned int nChainLengthCunningham1 = 0;
+    unsigned int nChainLengthCunningham2 = 0;
+    unsigned int nChainLengthBiTwin = 0;
+    unsigned int nChainType = 0;
+    if (!ProbablePrimeChainTest(bnChainOrigin, header.bits, false, nChainLengthCunningham1, nChainLengthCunningham2, nChainLengthBiTwin)) {
+         // Despite failing the check, still return info of longest primechain from the three chain types
+        nChainLength = nChainLengthCunningham1;
+        nChainType = PRIME_CHAIN_CUNNINGHAM1;
+        if (nChainLengthCunningham2 > nChainLength)
+        {
+            nChainLength = nChainLengthCunningham2;
+            nChainType = PRIME_CHAIN_CUNNINGHAM2;
+        }
+        if (nChainLengthBiTwin > nChainLength)
+        {
+            nChainLength = nChainLengthBiTwin;
+            nChainType = PRIME_CHAIN_BI_TWIN;
+        }
+    } 
+
     if (ProbablePrimeChainTestFast(bnChainOrigin, testParams)) {
       uint8_t buffer[256];
       BIGNUM *xxx = 0;
@@ -499,6 +549,62 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       nPrimesHit++;
     }
   }
-  
+
   return false;
+}
+
+void TargetIncrementLength(unsigned int& nBits)
+{
+    nBits += (1 << nFractionalBits);
+}
+
+unsigned int TargetFromInt(unsigned int nLength)
+{
+    return (nLength << nFractionalBits);
+}
+
+static bool ProbableCunninghamChainTest(const mpz_class &n, bool fSophieGermain, bool fFermatTest, unsigned int &nProbableChainLength)
+{
+    nProbableChainLength = 0;
+    mpz_class N = n;
+
+    // Fermat test for n first
+    if (!FermatProbablePrimalityTest(N, nProbableChainLength))
+        return false;
+
+    // Increment through chain
+    while (true) {
+        TargetIncrementLength(nProbableChainLength);
+        N = N + N + (fSophieGermain ? 1 : -1);
+
+        if (fFermatTest) {
+            if (!FermatProbablePrimalityTest(N, nProbableChainLength))
+                break;
+        } else {
+            break;
+        }
+    }
+
+    return (TargetGetLength(nProbableChainLength) >= 2);
+}
+
+bool ProbablePrimeChainTest(const mpz_class &bnChainOrigin, unsigned int nBits, bool fFermatTest, unsigned int &nChainLengthCunningham1, unsigned int &nChainLengthCunningham2, unsigned int &nChainLengthBiTwin)
+{
+    nChainLengthCunningham1 = 0;
+    nChainLengthCunningham2 = 0;
+    nChainLengthBiTwin = 0;
+
+    // Test for Cunningham Chain of first kind
+    ProbableCunninghamChainTest(bnChainOrigin - 1, true, fFermatTest, nChainLengthCunningham1);
+
+    // Test for Cunningham Chain of second kind
+    ProbableCunninghamChainTest(bnChainOrigin + 1, false, fFermatTest, nChainLengthCunningham2);
+
+    // Calculate BiTwin Chain length
+    nChainLengthBiTwin =
+        (TargetGetLength(nChainLengthCunningham1) > TargetGetLength(nChainLengthCunningham2))
+            ? (nChainLengthCunningham2 + TargetFromInt(TargetGetLength(nChainLengthCunningham2) + 1))
+            : (nChainLengthCunningham1 + TargetFromInt(TargetGetLength(nChainLengthCunningham1)));
+
+    return (nChainLengthCunningham1 >= nBits || nChainLengthCunningham2 >= nBits || nChainLengthBiTwin >= nBits);
 }
