@@ -492,7 +492,10 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
   mpz_class bnChainOrigin;
   
   unsigned int &nChainLength = testParams.chainLength;
-  unsigned int &nCandidateType = testParams.candidateType;      
+  unsigned int &nCandidateType = testParams.candidateType;
+  unsigned int nChainType = 0;
+  unsigned int maxChainLength = 0; 
+     
   sieve->resetCandidateIterator();
   while (true) {
     nTests++;
@@ -504,7 +507,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
                 usDiff(sieveEnd, primalityTestEnd) / 1000.0);
       }
       
-      return false;
+      break;
     }
     
     bnChainOrigin = hashMultiplier;
@@ -513,21 +516,24 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
     unsigned int nChainLengthCunningham1 = 0;
     unsigned int nChainLengthCunningham2 = 0;
     unsigned int nChainLengthBiTwin = 0;
-    unsigned int nChainType = 0;
+
     if (!ProbablePrimeChainTest(bnChainOrigin, header.bits, false, nChainLengthCunningham1, nChainLengthCunningham2, nChainLengthBiTwin)) {
          // Despite failing the check, still return info of longest primechain from the three chain types
-        nChainLength = nChainLengthCunningham1;
-        nChainType = PRIME_CHAIN_CUNNINGHAM1;
-        if (nChainLengthCunningham2 > nChainLength)
-        {
-            nChainLength = nChainLengthCunningham2;
-            nChainType = PRIME_CHAIN_CUNNINGHAM2;
+        unsigned int currentChainLength = nChainLengthCunningham1;
+        unsigned int currentChainType = PRIME_CHAIN_CUNNINGHAM1;
+        if (nChainLengthCunningham2 > currentChainLength) {
+          currentChainLength = nChainLengthCunningham2;
+          currentChainType = PRIME_CHAIN_CUNNINGHAM2;
         }
-        if (nChainLengthBiTwin > nChainLength)
-        {
-            nChainLength = nChainLengthBiTwin;
-            nChainType = PRIME_CHAIN_BI_TWIN;
+        if (nChainLengthBiTwin > currentChainLength) {
+            currentChainLength = nChainLengthBiTwin;
+            currentChainType = PRIME_CHAIN_BI_TWIN;
         }
+        if (currentChainLength > maxChainLength) {
+            maxChainLength = currentChainLength;
+            nChainType = currentChainType;
+        }
+        fprintf(stderr,"nChainType--: %u, ChainLength---: %u\n", currentChainType, currentChainLength);
     } 
 
     if (ProbablePrimeChainTestFast(bnChainOrigin, testParams)) {
@@ -548,7 +554,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       nPrimesHit++;
     }
   }
-
+  fprintf(stderr,"nChainType: %u, ChainLength: %u\n", nChainType, maxChainLength);
   return false;
 }
 
