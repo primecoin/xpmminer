@@ -1,7 +1,6 @@
 #include "CSieveOfEratosthenesL1Ext.h"
 #include "primecoin.h"
 #include "system.h"
-#include "../CPU/ripped.h"
 
 #include <stdlib.h>
 #include <time.h>
@@ -289,34 +288,6 @@ bool FermatProbablePrimalityTestFast(const mpz_class &n,
   return false;
 }
 
-static bool FermatProbablePrimalityTest(const mpz_class &n, unsigned int &nLength)
-{
-    mpz_class a = 2; // Base
-    mpz_class e = n - 1;
-    mpz_class r;
-
-    // Perform modular exponentiation: r = a^e mod n
-    mpz_powm(r.get_mpz_t(), a.get_mpz_t(), e.get_mpz_t(), n.get_mpz_t());
-
-    if (r == 1) {
-        return true;
-    }
-
-    // Calculate fractional length
-    unsigned int nFractionalBits = 16; // Define this constant globally if reused
-    mpz_class temp = n - r;
-    mpz_mul_2exp(temp.get_mpz_t(), temp.get_mpz_t(), nFractionalBits);
-    mpz_class nFractionalLength = temp / n;
-
-    if (nFractionalLength >= (1u << nFractionalBits)) {
-        printf("FermatProbablePrimalityTest() : fractional assert");
-        return false;
-    }
-
-    nLength = (nLength & TARGET_LENGTH_MASK) | nFractionalLength.get_ui();
-    return false;
-}
-
 static bool EulerLagrangeLifchitzPrimalityTestFast(const mpz_class& n,
                                                    bool fSophieGermain,
                                                    unsigned int& nLength,
@@ -460,64 +431,24 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
   return (nChainLength >= nBits);
 }
 
-void TargetIncrementLength(unsigned int& nBits)
-{
-    nBits += (1 << nFractionalBits);
+unsigned int TargetGetFractional(unsigned int nBits) {
+ return (nBits & DifficultyFractionalMask);
 }
 
-unsigned int TargetFromInt(unsigned int nLength)
-{
-    return (nLength << nFractionalBits);
+std::string TargetToString(unsigned int nBits) {
+ char buffer[32];
+ static unsigned int currentlength=(nBits & DifficultyChainLengthMask) >> DifficultyFractionalBits;
+ std::snprintf(buffer, sizeof(buffer), "%02x.%06x", currentlength, TargetGetFractional(nBits));
+ return std::string(buffer);
 }
 
-static bool ProbableCunninghamChainTest(const mpz_class &n, bool fSophieGermain, bool fFermatTest, unsigned int &nProbableChainLength)
-{
-    nProbableChainLength = 0;
-    mpz_class N = n;
-
-    // Fermat test for n first
-    if (!FermatProbablePrimalityTest(N, nProbableChainLength))
-        return false;
-
-    // Increment through chain
-    while (true) {
-        TargetIncrementLength(nProbableChainLength);
-        N = N + N + (fSophieGermain ? 1 : -1);
-
-        if (fFermatTest) {
-            if (!FermatProbablePrimalityTest(N, nProbableChainLength))
-                break;
-        } else {
-            break;
-        }
-    }
-
-    return (TargetGetLength(nProbableChainLength) >= 2);
+std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength) {
+ const std::string strLabels[5] = {"NUL", "1CC", "2CC", "TWN", "UNK"};
+ char buffer[64];
+ std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 4u)].c_str(), TargetToString(nChainLength).c_str());
+ fprintf(stderr, "Generated chain type: %s with length: %u\n", strLabels[std::min(nChainType, 4u)].c_str(), nChainLength);
+ return std::string(buffer);
 }
-
-
-
-bool ProbablePrimeChainTest(const mpz_class &bnChainOrigin, unsigned int nBits, bool fFermatTest, unsigned int &nChainLengthCunningham1, unsigned int &nChainLengthCunningham2, unsigned int &nChainLengthBiTwin)
-{
-    nChainLengthCunningham1 = 0;
-    nChainLengthCunningham2 = 0;
-    nChainLengthBiTwin = 0;
-
-    // Test for Cunningham Chain of first kind
-    ProbableCunninghamChainTest(bnChainOrigin - 1, true, fFermatTest, nChainLengthCunningham1);
-
-    // Test for Cunningham Chain of second kind
-    ProbableCunninghamChainTest(bnChainOrigin + 1, false, fFermatTest, nChainLengthCunningham2);
-
-    // Calculate BiTwin Chain length
-    nChainLengthBiTwin =
-        (TargetGetLength(nChainLengthCunningham1) > TargetGetLength(nChainLengthCunningham2))
-            ? (nChainLengthCunningham2 + TargetFromInt(TargetGetLength(nChainLengthCunningham2) + 1))
-            : (nChainLengthCunningham1 + TargetFromInt(TargetGetLength(nChainLengthCunningham1)));
-
-    return (nChainLengthCunningham1 >= nBits || nChainLengthCunningham2 >= nBits || nChainLengthBiTwin >= nBits);
-}
-
 
 bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
                                 CSieveOfEratosthenesL1Ext *sieve,
@@ -542,36 +473,6 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
             sieve->GetCandidateCount(),
             gSieveSize,
             gWeaveDepth);
-    mpz_class bnChainOrigin;
-    unsigned nTriedMultiplier;
-    unsigned int maxChainLength = 0;
-    unsigned int nChainType = 0;
-    unsigned int nChainLengthCunningham1 = 0;
-    unsigned int nChainLengthCunningham2 = 0;
-    unsigned int nChainLengthBiTwin = 0;
-
-    
-
-            if (ProbablePrimeChainTest(bnChainOrigin, header.bits, false, nChainLengthCunningham1, nChainLengthCunningham2, nChainLengthBiTwin)) {
-         // Despite failing the check, still return info of longest primechain from the three chain types
-        unsigned int currentChainLength = nChainLengthCunningham1;
-        unsigned int currentChainType = PRIME_CHAIN_CUNNINGHAM1;
-        if (nChainLengthCunningham2 > currentChainLength) {
-          currentChainLength = nChainLengthCunningham2;
-          currentChainType = PRIME_CHAIN_CUNNINGHAM2;
-        }
-        if (nChainLengthBiTwin > currentChainLength) {
-            currentChainLength = nChainLengthBiTwin;
-            currentChainType = PRIME_CHAIN_BI_TWIN;
-        }
-        if (currentChainLength > maxChainLength) {
-            maxChainLength = currentChainLength;
-            nChainType = currentChainType;
-        }
-        fprintf(stderr,"nChainType--: %u, ChainLength---: %u\n", currentChainType, currentChainLength);
-    } 
-
-      fprintf(stderr,"nChainType: %u, ChainLength: %u\n", nChainType, maxChainLength);
   }  
   
   nTests = 0;
@@ -580,10 +481,8 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
   mpz_class bnChainOrigin;
   
   unsigned int &nChainLength = testParams.chainLength;
-  unsigned int &nCandidateType = testParams.candidateType;
-  unsigned int nChainType = 0;
-  unsigned int maxChainLength = 0;
-
+  unsigned int &nCandidateType = testParams.candidateType;   
+  unsigned int &nChainType = testParams.chainLength;
   sieve->resetCandidateIterator();
   while (true) {
     nTests++;
@@ -595,13 +494,12 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
                 usDiff(sieveEnd, primalityTestEnd) / 1000.0);
       }
       
-      break;
+      return false;
     }
-      bnChainOrigin = hashMultiplier;
+    
+    bnChainOrigin = hashMultiplier;
     bnChainOrigin *= nTriedMultiplier;
-    unsigned int &nChainLength = testParams.chainLength;
     nChainLength = 0;
-
     if (ProbablePrimeChainTestFast(bnChainOrigin, testParams)) {
       uint8_t buffer[256];
       BIGNUM *xxx = 0;
@@ -611,6 +509,8 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       header.multiplier[0] = buffer[3];
       std::reverse_copy(buffer+4, buffer+4+buffer[3], header.multiplier+1);
       fprintf(stderr, "targetMultiplier=%s\n", targetMultiplier.get_str().c_str());
+      fprintf(stderr,"nChainType--: %u, ChainLength---: %u\n", nChainType, nChainLength);
+      std::string chainName = GetPrimeChainName(nChainType, nChainLength);
       return true;
     }
     
@@ -620,5 +520,6 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       nPrimesHit++;
     }
   }
+  
   return false;
 }

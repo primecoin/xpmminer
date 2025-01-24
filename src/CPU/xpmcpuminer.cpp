@@ -267,25 +267,6 @@ struct MineContext {
   void *log;
 };
 
-unsigned int TargetGetFractional(unsigned int nBits) {
- return (nBits & TARGET_FRACTIONAL_MASK);
-}
-
-std::string TargetToString(unsigned int nBits) {
- char buffer[32];
- std::snprintf(buffer, sizeof(buffer), "%02x.%06x", TargetGetLength(nBits), TargetGetFractional(nBits));
- return std::string(buffer);
-}
-
-std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength) {
- const std::string strLabels[5] = {"NUL", "1CC", "2CC", "TWN", "UNK"};
- char buffer[64];
- std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 4u)].c_str(), TargetToString(nChainLength).c_str());
- fprintf(stderr, "Generated chain type: %s with length: %u\n", strLabels[std::min(nChainType, 4u)].c_str(), nChainLength);
- return std::string(buffer);
-}
-
-
 void *mine(void *arg)
 {
   MineContext *ctx = (MineContext*)arg;
@@ -341,9 +322,6 @@ void *mine(void *arg)
                                    testParams,
                                    *ctx->primeSource,
                                    ctx->foundChains)) {
-      std::string chainName = GetPrimeChainName(testParams.candidateType, testParams.chainLength);
-      std::string logMessage = "Prime chain: " + chainName; 
-      logFormattedWrite(ctx->log, logMessage.c_str());
       logFormattedWrite(ctx->log, "block found!");
       ctx->submit->submitBlock(workTemplate, work, dataId);
       xsleep(5); // wait a bit for getblocktemplate to find our new block
