@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <limits>
-
+#include<iostream>
 #include <openssl/bn.h>
 #include <openssl/sha.h>
 
@@ -400,6 +400,7 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
   const unsigned int nBits = testParams.bits;
   const unsigned int nCandidateType = testParams.candidateType;
   unsigned int& nChainLength = testParams.chainLength;
+  unsigned int& nChainType = testParams.chainType;
   mpz_class& mpzOriginMinusOne = testParams.mpzOriginMinusOne;
   mpz_class& mpzOriginPlusOne = testParams.mpzOriginPlusOne;
   nChainLength = 0;
@@ -408,10 +409,12 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
   if (nCandidateType == PRIME_CHAIN_CUNNINGHAM1) {
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
     ProbableCunninghamChainTestFast(mpzOriginMinusOne, true, false, nChainLength, testParams);
+    nChainType=PRIME_CHAIN_CUNNINGHAM1;
   } else if (nCandidateType == PRIME_CHAIN_CUNNINGHAM2) {
     // Test for Cunningham Chain of second kind
     mpzOriginPlusOne = mpzPrimeChainOrigin + 1;
     ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, false, nChainLength, testParams);
+    nChainType=PRIME_CHAIN_CUNNINGHAM2;
   } else {
     unsigned int nChainLengthCunningham1 = 0;
     unsigned int nChainLengthCunningham2 = 0;
@@ -419,6 +422,7 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
     if (ProbableCunninghamChainTestFast(mpzOriginMinusOne, true, false, nChainLengthCunningham1, testParams)) {
       mpzOriginPlusOne = mpzPrimeChainOrigin + 1;
       ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, false, nChainLengthCunningham2, testParams);
+      nChainType=PRIME_CHAIN_BI_TWIN;
       // Figure out BiTwin Chain length
       // BiTwin Chain allows a single prime at the end for odd length chain
       nChainLength =
@@ -482,7 +486,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
   
   unsigned int &nChainLength = testParams.chainLength;
   unsigned int &nCandidateType = testParams.candidateType;   
-  unsigned int &nChainType = testParams.chainLength;
+  unsigned int &nChainType = testParams.chainType;
   sieve->resetCandidateIterator();
   while (true) {
     nTests++;
@@ -508,8 +512,8 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       BN_bn2mpi(xxx, buffer);
       header.multiplier[0] = buffer[3];
       std::reverse_copy(buffer+4, buffer+4+buffer[3], header.multiplier+1);
-      fprintf(stderr, "targetMultiplier=%s\n", targetMultiplier.get_str().c_str());
-      fprintf(stderr,"nChainType--: %u, ChainLength---: %u\n", nChainType, nChainLength);
+      fprintf(stderr, "targetMultiplier=%u\n", targetMultiplier.get_str().c_str());
+      //fprintf(stderr,"nChainType--: %u, ChainLength---: %s\n", nChainType, nChainLength);
       std::string chainName = GetPrimeChainName(nChainType, nChainLength);
       return true;
     }
