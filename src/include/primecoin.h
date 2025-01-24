@@ -123,10 +123,12 @@ struct CPrimalityTestParams {
   unsigned int bits;
   unsigned int candidateType;
   unsigned int chainLength;
+  unsigned int chainType;
   
   CPrimalityTestParams(unsigned int difficultyBits) {
     bits = difficultyBits;
     chainLength = 0;
+    chainType=0;
     mpz_init(mpzE);
     mpz_init(mpzR);
     mpz_init(mpzRplusOne);
@@ -172,5 +174,11 @@ bool updateBlock(PrimecoinBlockHeader *header,
                  const PrimeSource &primeSource,
                  CPrimalityTestParams &testParams,
                  unsigned nonceIncrement = 1);
+
+unsigned int TargetGetFractional(unsigned int nBits) ;
+
+std::string TargetToString(unsigned int nBits) ;
+
+std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength) ;
 
 #endif //__PRIMECOIN_H_
