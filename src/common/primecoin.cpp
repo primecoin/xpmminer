@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <time.h>
 #include <limits>
-#include<iostream>
 #include <openssl/bn.h>
 #include <openssl/sha.h>
 
@@ -515,6 +514,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       fprintf(stderr, "targetMultiplier=%u\n", targetMultiplier.get_str().c_str());
       //fprintf(stderr,"nChainType--: %u, ChainLength---: %s\n", nChainType, nChainLength);
       std::string chainName = GetPrimeChainName(nChainType, nChainLength);
+      fprintf(stderr, "Found chain: %s\n", chainName.c_str());
       return true;
     }
     
