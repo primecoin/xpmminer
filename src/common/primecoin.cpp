@@ -514,6 +514,8 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       fprintf(stderr, "targetMultiplier=%u\n", targetMultiplier.get_str().c_str());
       std::string chainName = GetPrimeChainName(nCandidateType, nChainLength);
       fprintf(stderr, "Found chain: %s\n", chainName.c_str());
+      fprintf(stderr, " * Target Difficulty (nBits): %08x\n", header.bits);
+      fprintf(stderr, " * Candidate Origin: %s\n", bnChainOrigin.get_str().c_str());
       return true;
     }
     
