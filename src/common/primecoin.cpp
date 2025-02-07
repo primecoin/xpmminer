@@ -403,25 +403,24 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
   mpz_class& mpzOriginMinusOne = testParams.mpzOriginMinusOne;
   mpz_class& mpzOriginPlusOne = testParams.mpzOriginPlusOne;
   nChainLength = 0;
-  
   // Test for Cunningham Chain of first kind
   if (nCandidateType == PRIME_CHAIN_CUNNINGHAM1) {
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
-    ProbableCunninghamChainTestFast(mpzOriginMinusOne, true, false, nChainLength, testParams);
     nChainType=PRIME_CHAIN_CUNNINGHAM1;
+    ProbableCunninghamChainTestFast(mpzOriginMinusOne, true, false, nChainLength, testParams);
   } else if (nCandidateType == PRIME_CHAIN_CUNNINGHAM2) {
     // Test for Cunningham Chain of second kind
     mpzOriginPlusOne = mpzPrimeChainOrigin + 1;
-    ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, false, nChainLength, testParams);
     nChainType=PRIME_CHAIN_CUNNINGHAM2;
+    ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, false, nChainLength, testParams);
   } else {
     unsigned int nChainLengthCunningham1 = 0;
     unsigned int nChainLengthCunningham2 = 0;
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
     if (ProbableCunninghamChainTestFast(mpzOriginMinusOne, true, false, nChainLengthCunningham1, testParams)) {
       mpzOriginPlusOne = mpzPrimeChainOrigin + 1;
-      ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, false, nChainLengthCunningham2, testParams);
       nChainType=PRIME_CHAIN_BI_TWIN;
+      ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, false, nChainLengthCunningham2, testParams);
       // Figure out BiTwin Chain length
       // BiTwin Chain allows a single prime at the end for odd length chain
       nChainLength =
@@ -499,7 +498,6 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       
       return false;
     }
-    
     bnChainOrigin = hashMultiplier;
     bnChainOrigin *= nTriedMultiplier;
     nChainLength = 0;
@@ -514,7 +512,8 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       fprintf(stderr, "targetMultiplier=%u\n", targetMultiplier.get_str().c_str());
       std::string chainName = GetPrimeChainName(nCandidateType, nChainLength);
       fprintf(stderr, "Found chain: %s\n", chainName.c_str());
-      fprintf(stderr, " * Target Difficulty (nBits): %08x\n", header.bits);
+      std:: string nbitstarget =TargetToString( header.bits);
+      fprintf(stderr, " * Target Difficulty (nBits): %s\n",nbitstarget.c_str());
       fprintf(stderr, " * Candidate Origin: %s\n", bnChainOrigin.get_str().c_str());
       return true;
     }
