@@ -123,12 +123,10 @@ struct CPrimalityTestParams {
   unsigned int bits;
   unsigned int candidateType;
   unsigned int chainLength;
-  unsigned int chainType;
   
   CPrimalityTestParams(unsigned int difficultyBits) {
     bits = difficultyBits;
     chainLength = 0;
-    chainType=0;
     mpz_init(mpzE);
     mpz_init(mpzR);
     mpz_init(mpzRplusOne);
