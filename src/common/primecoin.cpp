@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <limits>
+
 #include <openssl/bn.h>
 #include <openssl/sha.h>
 
@@ -399,19 +400,17 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
   const unsigned int nBits = testParams.bits;
   const unsigned int nCandidateType = testParams.candidateType;
   unsigned int& nChainLength = testParams.chainLength;
-  unsigned int& nChainType = testParams.chainType;
   mpz_class& mpzOriginMinusOne = testParams.mpzOriginMinusOne;
   mpz_class& mpzOriginPlusOne = testParams.mpzOriginPlusOne;
   nChainLength = 0;
+
   // Test for Cunningham Chain of first kind
   if (nCandidateType == PRIME_CHAIN_CUNNINGHAM1) {
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
-    nChainType=PRIME_CHAIN_CUNNINGHAM1;
     ProbableCunninghamChainTestFast(mpzOriginMinusOne, true, false, nChainLength, testParams);
   } else if (nCandidateType == PRIME_CHAIN_CUNNINGHAM2) {
     // Test for Cunningham Chain of second kind
     mpzOriginPlusOne = mpzPrimeChainOrigin + 1;
-    nChainType=PRIME_CHAIN_CUNNINGHAM2;
     ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, false, nChainLength, testParams);
   } else {
     unsigned int nChainLengthCunningham1 = 0;
@@ -419,7 +418,6 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
     if (ProbableCunninghamChainTestFast(mpzOriginMinusOne, true, false, nChainLengthCunningham1, testParams)) {
       mpzOriginPlusOne = mpzPrimeChainOrigin + 1;
-      nChainType=PRIME_CHAIN_BI_TWIN;
       ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, false, nChainLengthCunningham2, testParams);
       // Figure out BiTwin Chain length
       // BiTwin Chain allows a single prime at the end for odd length chain
@@ -484,7 +482,6 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
   
   unsigned int &nChainLength = testParams.chainLength;
   unsigned int &nCandidateType = testParams.candidateType;   
-  unsigned int &nChainType = testParams.chainType;
   sieve->resetCandidateIterator();
   while (true) {
     nTests++;
@@ -498,6 +495,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       
       return false;
     }
+    
     bnChainOrigin = hashMultiplier;
     bnChainOrigin *= nTriedMultiplier;
     nChainLength = 0;
