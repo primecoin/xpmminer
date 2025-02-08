@@ -403,7 +403,7 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
   mpz_class& mpzOriginMinusOne = testParams.mpzOriginMinusOne;
   mpz_class& mpzOriginPlusOne = testParams.mpzOriginPlusOne;
   nChainLength = 0;
-  
+
   // Test for Cunningham Chain of first kind
   if (nCandidateType == PRIME_CHAIN_CUNNINGHAM1) {
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
@@ -431,6 +431,23 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
   return (nChainLength >= nBits);
 }
 
+unsigned int TargetGetFractional(unsigned int nBits) {
+ return (nBits & DifficultyFractionalMask);
+}
+
+std::string TargetToString(unsigned int nBits) {
+ char buffer[32];
+ static unsigned int currentlength=(nBits & DifficultyChainLengthMask) >> DifficultyFractionalBits;
+ std::snprintf(buffer, sizeof(buffer), "%02x.%06x", currentlength, TargetGetFractional(nBits));
+ return std::string(buffer);
+}
+
+std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength) {
+ const std::string strLabels[5] = {"NUL", "1CC", "2CC", "TWN", "UNK"};
+ char buffer[64];
+ std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 4u)].c_str(), TargetToString(nChainLength).c_str());
+ return std::string(buffer);
+}
 
 bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
                                 CSieveOfEratosthenesL1Ext *sieve,
@@ -463,7 +480,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
   mpz_class bnChainOrigin;
   
   unsigned int &nChainLength = testParams.chainLength;
-  unsigned int &nCandidateType = testParams.candidateType;      
+  unsigned int &nCandidateType = testParams.candidateType;   
   sieve->resetCandidateIterator();
   while (true) {
     nTests++;
@@ -477,7 +494,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       
       return false;
     }
-    
+
     bnChainOrigin = hashMultiplier;
     bnChainOrigin *= nTriedMultiplier;
     nChainLength = 0;
@@ -489,7 +506,12 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       BN_bn2mpi(xxx, buffer);
       header.multiplier[0] = buffer[3];
       std::reverse_copy(buffer+4, buffer+4+buffer[3], header.multiplier+1);
-      fprintf(stderr, "targetMultiplier=%s\n", targetMultiplier.get_str().c_str());
+      fprintf(stderr, "targetMultiplier=%u\n", targetMultiplier.get_str().c_str());
+      std::string chainName = GetPrimeChainName(nCandidateType, nChainLength);
+      fprintf(stderr, "Found chain: %s\n", chainName.c_str());
+      std:: string nbitsTarget =TargetToString( header.bits);
+      fprintf(stderr, "Target (nbits): %s\n",nbitsTarget.c_str());
+      fprintf(stderr, " * Candidate Origin: %s\n", bnChainOrigin.get_str().c_str());
       return true;
     }
     
