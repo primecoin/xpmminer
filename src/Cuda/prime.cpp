@@ -1,7 +1,7 @@
 /*
  * prime.cpp
  *
- *  Created on: 03.05.2014
+ *  Created on: 03.05.2014make
  *      Author: mad
  */
 
@@ -21,18 +21,6 @@ static const unsigned int TARGET_LENGTH_MASK = ~TARGET_FRACTIONAL_MASK;
 unsigned int TargetGetLength(unsigned int nBits)
 {
     return ((nBits & TARGET_LENGTH_MASK) >> nFractionalBits);
-}
-
-unsigned int TargetGetFractional(unsigned int nBits)
-{
-    return (nBits & TARGET_FRACTIONAL_MASK);
-}
-
-std::string TargetToString(unsigned int nBits)
-{
-    char tmp[20];
-	sprintf(tmp, "%02x.%06x", TargetGetLength(nBits), TargetGetFractional(nBits));
-	return std::string(tmp);
 }
 
 static void TargetIncrementLength(unsigned int& nBits)

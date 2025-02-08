@@ -446,7 +446,6 @@ std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength
  const std::string strLabels[5] = {"NUL", "1CC", "2CC", "TWN", "UNK"};
  char buffer[64];
  std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 4u)].c_str(), TargetToString(nChainLength).c_str());
- fprintf(stderr, "Generated chain type: %s with length: %u\n", strLabels[std::min(nChainType, 4u)].c_str(), nChainLength);
  return std::string(buffer);
 }
 
@@ -495,7 +494,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       
       return false;
     }
-    
+
     bnChainOrigin = hashMultiplier;
     bnChainOrigin *= nTriedMultiplier;
     nChainLength = 0;
@@ -510,8 +509,8 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       fprintf(stderr, "targetMultiplier=%u\n", targetMultiplier.get_str().c_str());
       std::string chainName = GetPrimeChainName(nCandidateType, nChainLength);
       fprintf(stderr, "Found chain: %s\n", chainName.c_str());
-      std:: string nbitstarget =TargetToString( header.bits);
-      fprintf(stderr, " * Target Difficulty (nBits): %s\n",nbitstarget.c_str());
+      std:: string nbitsTarget =TargetToString( header.bits);
+      fprintf(stderr, "Target scale %s\n",nbitstarget.c_str());
       fprintf(stderr, " * Candidate Origin: %s\n", bnChainOrigin.get_str().c_str());
       return true;
     }
