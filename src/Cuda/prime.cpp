@@ -1,7 +1,7 @@
 /*
  * prime.cpp
  *
- *  Created on: 03.05.2014make
+ *  Created on: 03.05.2014
  *      Author: mad
  */
 
