@@ -179,4 +179,6 @@ std::string TargetToString(unsigned int nBits);
 
 std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength) ;
 
+std::string GetPrimeChainNameCuda(unsigned int nChainType, unsigned int nChainLength) ;
+
 #endif //__PRIMECOIN_H_
