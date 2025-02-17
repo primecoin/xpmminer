@@ -177,8 +177,10 @@ unsigned int TargetGetFractional(unsigned int nBits);
 
 std::string TargetToString(unsigned int nBits);
 
+std::string TargetToStringStright(unsigned int nBits, unsigned nLength);
+
 std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength) ;
 
-std::string GetPrimeChainNameCuda(unsigned int nChainType, unsigned int nChainLength) ;
+std::string GetPrimeChainNameCuda(unsigned int nChainType, unsigned int nChainLength ,unsigned nLength) ;
 
 #endif //__PRIMECOIN_H_

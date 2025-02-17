@@ -23,6 +23,13 @@ unsigned int TargetGetLength(unsigned int nBits)
     return ((nBits & TARGET_LENGTH_MASK) >> nFractionalBits);
 }
 
+std::string TargetToStringCuda(unsigned int nBits) {
+  char buffer[32];
+  static unsigned int currentlength=TargetGetLength(nBits);
+  std::snprintf(buffer, sizeof(buffer), "%02x.%06x", currentlength, TargetGetFractional(nBits));
+  return std::string(buffer);
+ }
+
 static void TargetIncrementLength(unsigned int& nBits)
 {
     nBits += (1 << nFractionalBits);
@@ -151,7 +158,7 @@ static void ProbableCunninghamChainTestFast(const mpz_class& n, bool fSophieGerm
     }
 
     // Fermat test for n first
-    if (!FermatProbablePrimalityTestFast(N, nProbableChainLength, testParams, true))
+    if (!FermatProbablePrimalityTestFast(N, nProbableChainLength, testParams, false))
         return;
 
     // Euler-Lagrange-Lifchitz test for the following numbers in chain
@@ -184,7 +191,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
     mpzOriginMinusOne += X;
   }
   
-  if (!FermatProbablePrimalityTestFast(mpzOriginMinusOne, nProbableChainLength, testParams, true))
+  if (!FermatProbablePrimalityTestFast(mpzOriginMinusOne, nProbableChainLength, testParams, false))
     return;
   TargetIncrementLength(nProbableChainLength);
   
@@ -195,7 +202,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
     mpzOriginPlusOne -= X;
   }
   
-  if (!FermatProbablePrimalityTestFast(mpzOriginPlusOne, nProbableChainLength, testParams, true))
+  if (!FermatProbablePrimalityTestFast(mpzOriginPlusOne, nProbableChainLength, testParams, false))
     return;
   TargetIncrementLength(nProbableChainLength);
   
@@ -242,7 +249,6 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   {
     ProbableBiTwinChainTestFast(mpzPrimeChainOrigin, nChainLength, testParams, base);
   }
-  
   return (nChainLength >= nBits);
 }
 
