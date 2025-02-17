@@ -249,6 +249,7 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   {
     ProbableBiTwinChainTestFast(mpzPrimeChainOrigin, nChainLength, testParams, base);
   }
+  
   return (nChainLength >= nBits);
 }
 
