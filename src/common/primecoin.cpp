@@ -403,6 +403,7 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
   mpz_class& mpzOriginMinusOne = testParams.mpzOriginMinusOne;
   mpz_class& mpzOriginPlusOne = testParams.mpzOriginPlusOne;
   nChainLength = 0;
+  
   // Test for Cunningham Chain of first kind
   if (nCandidateType == PRIME_CHAIN_CUNNINGHAM1) {
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
