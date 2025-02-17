@@ -404,6 +404,7 @@ bool ProbablePrimeChainTestFast(const mpz_class& mpzPrimeChainOrigin,
   mpz_class& mpzOriginPlusOne = testParams.mpzOriginPlusOne;
   nChainLength = 0;
 
+
   // Test for Cunningham Chain of first kind
   if (nCandidateType == PRIME_CHAIN_CUNNINGHAM1) {
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
@@ -480,7 +481,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
   mpz_class bnChainOrigin;
   
   unsigned int &nChainLength = testParams.chainLength;
-  unsigned int &nCandidateType = testParams.candidateType;   
+  unsigned int &nCandidateType = testParams.candidateType;   ;   
   sieve->resetCandidateIterator();
   while (true) {
     nTests++;
