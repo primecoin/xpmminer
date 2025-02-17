@@ -480,7 +480,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
   mpz_class bnChainOrigin;
   
   unsigned int &nChainLength = testParams.chainLength;
-  unsigned int &nCandidateType = testParams.candidateType;
+  unsigned int &nCandidateType = testParams.candidateType;  
   sieve->resetCandidateIterator();
   while (true) {
     nTests++;
