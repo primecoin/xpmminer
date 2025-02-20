@@ -59,6 +59,7 @@ unsigned int TargetGetFractional(unsigned int nBits);
 std::string TargetToString(unsigned int nBits);
 
 
+
 inline void mpz_set_uint256(mpz_t r, uint256& u)
 {
     mpz_import(r, 32 / sizeof(unsigned long), -1, sizeof(unsigned long), -1, 0, &u);
