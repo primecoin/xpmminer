@@ -719,11 +719,12 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           
           std::string chainName = GetPrimeChainNameCuda(testParams.nCandidateType,testParams.nChainLength);
           LOG_F(1, "GPU %d found share: %s", mID, chainName.c_str());
-          if(isblock){
+          if(isblock){{
             LOG_F(1, "GPU %d found BLocK!", mID);
-            std::string nbitsTarget =TargetToString(testParams.nBits);
-            LOG_F(1,"Found chain:%s",chainName.c_str());
-            LOG_F(1,"Target (nbits):%s\n------------------------------------------------------------------------",nbitsTarget.c_str());
+                std::string nbitsTarget =TargetToString(testParams.nBits);
+              LOG_F(1,"Found chain:%s",chainName.c_str());
+              LOG_F(1,"Target (nbits):%s\n------------------------------------------------------------------------",nbitsTarget.c_str());
+          }
           }
         }else if(chainlength < mDepth){
           LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(chainorg.get_mpz_t(), 2), chainlength, mDepth);
