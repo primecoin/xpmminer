@@ -437,16 +437,10 @@ unsigned int TargetGetFractional(unsigned int nBits) {
 
 std::string TargetToString(unsigned int nBits) {
  char buffer[32];
- static unsigned int currentlength=(nBits & DifficultyChainLengthMask) >> DifficultyFractionalBits;
+ unsigned int currentlength=(nBits & DifficultyChainLengthMask) >> DifficultyFractionalBits;
  std::snprintf(buffer, sizeof(buffer), "%02x.%06x", currentlength, TargetGetFractional(nBits));
  return std::string(buffer);
 }
-
-std::string TargetToStringStright(unsigned int nBits, unsigned nLength) {
-  char buffer[32];
-  std::snprintf(buffer, sizeof(buffer), "%02x.%06x", nLength, TargetGetFractional(nBits));
-  return std::string(buffer);
- }
 
 std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength) {
  const std::string strLabels[5] = {"NUL", "1CC", "2CC", "TWN", "UNK"};
@@ -454,10 +448,10 @@ std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength
  std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 4u)].c_str(), TargetToString(nChainLength).c_str());
  return std::string(buffer);
 }
-std::string GetPrimeChainNameCuda(unsigned int nChainType, unsigned int nChainLength,unsigned nLength) {
+std::string GetPrimeChainNameCuda(unsigned int nChainType, unsigned int nChainLength) {
   const std::string strLabels[3] = { "1CC", "2CC", "TWN" };
   char buffer[64];
-  std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 2u)].c_str(), TargetToStringStright(nChainLength,nLength).c_str());
+  std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 2u)].c_str(), TargetToString(nChainLength).c_str());
   return std::string(buffer);
  }
 

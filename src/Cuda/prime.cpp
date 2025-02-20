@@ -23,13 +23,6 @@ unsigned int TargetGetLength(unsigned int nBits)
     return ((nBits & TARGET_LENGTH_MASK) >> nFractionalBits);
 }
 
-std::string TargetToStringCuda(unsigned int nBits) {
-  char buffer[32];
-  static unsigned int currentlength=TargetGetLength(nBits);
-  std::snprintf(buffer, sizeof(buffer), "%02x.%06x", currentlength, TargetGetFractional(nBits));
-  return std::string(buffer);
- }
-
 static void TargetIncrementLength(unsigned int& nBits)
 {
     nBits += (1 << nFractionalBits);

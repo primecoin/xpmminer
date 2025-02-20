@@ -56,7 +56,6 @@ public:
 
 unsigned int TargetGetLength(unsigned int nBits);
 unsigned int TargetGetFractional(unsigned int nBits);
-std::string TargetToStringCuda(unsigned int nBits);
 
 
 inline void mpz_set_uint256(mpz_t r, uint256& u)

@@ -681,7 +681,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
         if(chainlength >= TargetGetLength(blockheader.bits)){
-          printf("candis[%d] = %s, chainlength %u, targetlength %u\n", i, chainorg.get_str(10).c_str(), chainlength, TargetGetLength(blockheader.bits));
+          printf("\ncandis[%d] = %s, chainlength %u\n", i, chainorg.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
           work.version = blockheader.version;
           char blkhex[128];
@@ -703,8 +703,8 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           LOG_F(1, "GPU %d found share: %d-ch type %d", mID, chainlength, candi.type+1);
           if(isblock)
             LOG_F(1, "GPU %d found BLocK!", mID);
-          std::string chainName = GetPrimeChainNameCuda(testParams.nCandidateType,testParams.nChainLength,chainlength);
-          std::string nbitsTarget =TargetToStringCuda(testParams.nBits);
+          std::string chainName = GetPrimeChainNameCuda(testParams.nCandidateType,testParams.nChainLength);
+          std::string nbitsTarget =TargetToString(testParams.nBits);
           LOG_F(1,"Found chain:%s",chainName.c_str());
           LOG_F(1,"Target (nbits):%s\n----------------------------------------------------------------------",nbitsTarget.c_str());
         }else if(chainlength < mDepth){
