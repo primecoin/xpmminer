@@ -438,6 +438,7 @@ unsigned int TargetGetFractional(unsigned int nBits) {
 std::string TargetToString(unsigned int nBits) {
  char buffer[32];
  unsigned int currentlength=(nBits & DifficultyChainLengthMask) >> DifficultyFractionalBits;
+ unsigned int currentlength=(nBits & DifficultyChainLengthMask) >> DifficultyFractionalBits;
  std::snprintf(buffer, sizeof(buffer), "%02x.%06x", currentlength, TargetGetFractional(nBits));
  return std::string(buffer);
 }
