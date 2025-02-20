@@ -699,6 +699,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           work.multiplier[0] = buffer[3];
           std::reverse_copy(buffer+4, buffer+4+buffer[3], work.multiplier+1);
           submit->submitBlock(workTemplate, work, dataId);
+          
           std::string chainName = GetPrimeChainNameCuda(testParams.nCandidateType,testParams.nChainLength);
           LOG_F(1, "GPU %d found share: %s", mID, chainName.c_str());
           if(isblock){
