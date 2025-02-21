@@ -151,7 +151,7 @@ static void ProbableCunninghamChainTestFast(const mpz_class& n, bool fSophieGerm
     }
 
     // Fermat test for n first
-    if (!FermatProbablePrimalityTestFast(N, nProbableChainLength, testParams, true))
+    if (!FermatProbablePrimalityTestFast(N, nProbableChainLength, testParams, false))
         return;
 
     // Euler-Lagrange-Lifchitz test for the following numbers in chain
@@ -184,7 +184,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
     mpzOriginMinusOne += X;
   }
   
-  if (!FermatProbablePrimalityTestFast(mpzOriginMinusOne, nProbableChainLength, testParams, true))
+  if (!FermatProbablePrimalityTestFast(mpzOriginMinusOne, nProbableChainLength, testParams, false))
     return;
   TargetIncrementLength(nProbableChainLength);
   
@@ -195,7 +195,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
     mpzOriginPlusOne -= X;
   }
   
-  if (!FermatProbablePrimalityTestFast(mpzOriginPlusOne, nProbableChainLength, testParams, true))
+  if (!FermatProbablePrimalityTestFast(mpzOriginPlusOne, nProbableChainLength, testParams, false))
     return;
   TargetIncrementLength(nProbableChainLength);
   

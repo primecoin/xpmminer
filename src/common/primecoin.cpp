@@ -437,7 +437,7 @@ unsigned int TargetGetFractional(unsigned int nBits) {
 
 std::string TargetToString(unsigned int nBits) {
  char buffer[32];
- static unsigned int currentlength=(nBits & DifficultyChainLengthMask) >> DifficultyFractionalBits;
+ unsigned int currentlength=(nBits & DifficultyChainLengthMask) >> DifficultyFractionalBits;
  std::snprintf(buffer, sizeof(buffer), "%02x.%06x", currentlength, TargetGetFractional(nBits));
  return std::string(buffer);
 }
@@ -448,6 +448,12 @@ std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength
  std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 4u)].c_str(), TargetToString(nChainLength).c_str());
  return std::string(buffer);
 }
+std::string GetPrimeChainNameCuda(unsigned int nChainType, unsigned int nChainLength) {
+  const std::string strLabels[3] = { "1CC", "2CC", "TWN" };
+  char buffer[64];
+  std::snprintf(buffer, sizeof(buffer), "%s%s", strLabels[std::min(nChainType, 2u)].c_str(), TargetToString(nChainLength).c_str());
+  return std::string(buffer);
+ }
 
 bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
                                 CSieveOfEratosthenesL1Ext *sieve,
