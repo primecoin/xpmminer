@@ -662,6 +662,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     if(candis.size()){
       mpz_class chainorg;
       mpz_class multi;
+      mpz_class multiNor;
       for(unsigned i = 0; i < candis.size(); ++i){
         
         fermat_t& candi = candis[i];
@@ -673,12 +674,28 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         
         multi = candi.index;
         multi <<= candi.origin;
+        multiNor == multi;
         chainorg = hash.shash;
         chainorg *= multi;
         
         testParams.nCandidateType = candi.type;
         bool isblock = ProbablePrimeChainTestFastCuda(chainorg, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
+
+        // 归一化到最长的 origin
+        NormalizeToLongestOrigin(chainorg, multi, chainlength, testParams, mDepth);
+        
+        // 使用归一化后的 origin、multi 和链长度
+        LOG_F(1,"Longest origin: %s, Longest multi: %s, Chain length: %d\n", 
+          chainorg.get_str().c_str(), multi.get_str().c_str(), chainlength);
+        
+        while(multi  < multiNor)
+        {
+          multi *= 2;
+          candi.index /= 2;
+        }
+        isblock = ProbablePrimeChainTestFastCuda(chainorg, testParams, mDepth);
+        chainlength = TargetGetLength(testParams.nChainLength);
 
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, chainorg.get_str(10).c_str(), chainlength);
