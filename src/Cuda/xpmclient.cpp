@@ -691,6 +691,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     if(candis.size()){
       mpz_class nOrigin;
       mpz_class multi;
+      mpz_class multiNor;
       for(unsigned i = 0; i < candis.size(); ++i){
         
         fermat_t& candi = candis[i];
@@ -702,6 +703,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         
         multi = candi.index;
         multi <<= candi.origin;
+        multiNor == multi;
         nOrigin = hash.shash;
         nOrigin *= multi;
         
@@ -709,38 +711,21 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
-        while(multi % 2 == 0 && nOrigin % 4 == 0)
+        // 归一化到最长的 origin
+        NormalizeToLongestOrigin(chainorg, multi, chainlength, testParams, mDepth);
+        
+        // 使用归一化后的 origin、multi 和链长度
+        LOG_F(1,"Longest origin: %s, Longest multi: %s, Chain length: %d\n", 
+          chainorg.get_str().c_str(), multi.get_str().c_str(), chainlength);
+        
+        while(multi  < multiNor)
         {
-          mpz_class nOriginNormalize = nOrigin / 2 ;
-          CPrimalityTestParamsCuda testParamsNormalize = testParams;
-
-          if(ProbablePrimeChainTestFastCuda(nOriginNormalize, testParamsNormalize, mDepth))
-          {
-            unsigned chainlengthNormalize = TargetGetLength(testParamsNormalize.nChainLength);
-            if( chainlengthNormalize > chainlength )
-            {
-              multi /= 2;
-              chainlength = chainlengthNormalize;
-              testParams = testParamsNormalize;
-              std::cout<<"Normalized nchainLength "<<testParamsNormalize.nChainLength<<"\n";
-              std::cout<<"Normalized Multiplier "<<multi.get_str()<<"\n";
-            }
-            else
-            {
-            break;
-            }
-          }
-        else
-          {
-            break;
-          }
+          multi *= 2;
+          candi.index /= 2;
         }
+        isblock = ProbablePrimeChainTestFastCuda(chainorg, testParams, mDepth);
+        chainlength = TargetGetLength(testParams.nChainLength);
 
-        if (chainlength > 0 && chainlength < MaxChainLength) {
-          mFoundChains[chainlength]++;
-        }
-        nOrigin = hash.shash;
-        nOrigin *= multi;
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
