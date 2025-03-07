@@ -8,8 +8,8 @@
 
 
 #include "prime.h"
-
-
+#include <iostream> // 或包含定义 LOG_F 的头文件
+#include <gmpxx.h>
 
 const unsigned int nFractionalBits = 24;
 unsigned int nTargetInitialLength = 7; // initial chain length target
@@ -237,7 +237,6 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   mpz_class& mpzOriginPlusOne = testParams.mpzOriginPlusOne;
   unsigned int& nChainLength = testParams.nChainLength;
   nChainLength = 0;
-  
   // Test for Cunningham Chain of first kind
   if (nCandidateType == 0)
   {
@@ -254,8 +253,69 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   {
     ProbableBiTwinChainTestFast(mpzPrimeChainOrigin, nChainLength, testParams, base);
   }
-  
   return (nChainLength >= nBits);
 }
 
 
+
+bool ProbablePrimeChainNormailzed(const mpz_class& mpzPrimeChainOrigin, unsigned nChainLength, CPrimalityTestParamsCuda& testParams, int base)
+{
+      CPrimalityTestParamsCuda extendedTestParams = testParams;
+      extendedTestParams.nChainLength = 0;
+  
+      extendedTestParams.nCandidateType = 0;
+      ProbableCunninghamChainTestFast(mpzPrimeChainOrigin - 1, true, extendedTestParams.nChainLength, extendedTestParams, base);
+      unsigned int nChainLengthCunningham1Extended = extendedTestParams.nChainLength;
+  
+      extendedTestParams.nCandidateType = 1;
+      extendedTestParams.nChainLength = 0;
+      ProbableCunninghamChainTestFast(mpzPrimeChainOrigin + 1, false, extendedTestParams.nChainLength, extendedTestParams, base);
+      unsigned int nChainLengthCunningham2Extended = extendedTestParams.nChainLength;
+  
+      extendedTestParams.nCandidateType = 2;
+      extendedTestParams.nChainLength = 0;
+      ProbableBiTwinChainTestFast(mpzPrimeChainOrigin, extendedTestParams.nChainLength, extendedTestParams, base);
+      unsigned int nChainLengthBiTwinExtended = extendedTestParams.nChainLength;
+  
+      nChainLength = std::max({nChainLengthCunningham1Extended, nChainLengthCunningham2Extended, nChainLengthBiTwinExtended});
+
+      return nChainLength > testParams.nChainLength;
+
+}
+
+void NormalizeToLongestOrigin(mpz_class& chainorg, mpz_class& multi, unsigned int& nChainLength, CPrimalityTestParamsCuda& testParams, int base)
+{
+    mpz_class longestOrigin = chainorg; // 记录最长的 origin
+    mpz_class longestMulti = multi; // 记录最长的 multi
+    unsigned int longestChainLength = nChainLength; // 记录最长的链长度
+
+    // 遍历所有可能的归一化路径
+    while (multi % 2 == 0 && chainorg % 4 == 0)
+    {
+        multi /= 2; // 归一化 multi
+        chainorg /= 2; // 归一化 chainorg
+        unsigned int extendedChainLength = 0;
+
+        // 检查归一化后的 origin 是否可以生成更长的链
+        if (ProbablePrimeChainNormailzed(chainorg, extendedChainLength, testParams, base))
+        {
+            // 如果扩展链更长，则更新最长链的 origin、multi 和长度
+            if (extendedChainLength > longestChainLength)
+            {
+                longestOrigin = chainorg;
+                longestMulti = multi;
+                longestChainLength = extendedChainLength;
+            }
+        }
+        else
+        {
+            // 如果不能生成更长的链，则停止归一化
+            break;
+        }
+    }
+
+    // 将 chainorg、multi 和 nChainLength 更新为最长的 origin、multi 和链长度
+    chainorg = longestOrigin;
+    multi = longestMulti;
+    nChainLength = longestChainLength;
+}

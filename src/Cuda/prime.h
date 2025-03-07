@@ -66,7 +66,9 @@ inline void mpz_set_uint256(mpz_t r, uint256& u)
 
 bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrimalityTestParamsCuda& testParams, int base);
 
+bool ProbablePrimeChainNormailzed(const mpz_class& mpzPrimeChainOrigin, unsigned nChainLength, CPrimalityTestParamsCuda& testParams, int base);
 
+void NormalizeToLongestOrigin(mpz_class& chainorg, mpz_class& multi, unsigned int& nChainLength, CPrimalityTestParamsCuda& testParams, int base);
 
 
 
