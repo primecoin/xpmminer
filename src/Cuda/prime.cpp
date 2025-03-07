@@ -237,7 +237,7 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   mpz_class& mpzOriginPlusOne = testParams.mpzOriginPlusOne;
   unsigned int& nChainLength = testParams.nChainLength;
   nChainLength = 0;
-
+  
   // Test for Cunningham Chain of first kind
   if (nCandidateType == 0)
   {
