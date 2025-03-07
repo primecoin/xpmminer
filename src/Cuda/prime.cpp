@@ -8,8 +8,6 @@
 
 
 #include "prime.h"
-#include <iostream> // 或包含定义 LOG_F 的头文件
-#include <gmpxx.h>
 
 const unsigned int nFractionalBits = 24;
 unsigned int nTargetInitialLength = 7; // initial chain length target
@@ -237,6 +235,7 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   mpz_class& mpzOriginPlusOne = testParams.mpzOriginPlusOne;
   unsigned int& nChainLength = testParams.nChainLength;
   nChainLength = 0;
+
   // Test for Cunningham Chain of first kind
   if (nCandidateType == 0)
   {
@@ -253,6 +252,7 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   {
     ProbableBiTwinChainTestFast(mpzPrimeChainOrigin, nChainLength, testParams, base);
   }
+  
   return (nChainLength >= nBits);
 }
 
