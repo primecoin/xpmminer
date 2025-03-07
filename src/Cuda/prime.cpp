@@ -287,7 +287,7 @@ void NormalizeToLongestOrigin(mpz_class& chainorg, mpz_class& multi, unsigned in
         // 检查归一化后的 origin 是否可以生成更长的链
         if (ProbablePrimeChainNormailzed(chainorg, extendedChainLength, testParams, base))
         {
-            // 如果扩展链更长，则更新最长链的 origin、multi 和长度
+            // 如果扩展链更长，则更新最长链的  origin、multi 和长度
             if (extendedChainLength > longestChainLength)
             {
                 longestOrigin = chainorg;
