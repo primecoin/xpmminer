@@ -690,8 +690,8 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     // check candis
     if(candis.size()){
       mpz_class nOrigin;
+      mpz_class nOrigin;
       mpz_class multi;
-      mpz_class multiNor;
       for(unsigned i = 0; i < candis.size(); ++i){
         
         fermat_t& candi = candis[i];
@@ -703,27 +703,40 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         
         multi = candi.index;
         multi <<= candi.origin;
-        multiNor == multi;
         nOrigin = hash.shash;
         nOrigin *= multi;
         
         testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
-
-        // 归一化到最长的 origin
-        NormalizeToLongestOrigin(chainorg, multi, chainlength, testParams, mDepth);
         
-        // 使用归一化后的 origin、multi 和链长度
-        LOG_F(1,"Longest origin: %s, Longest multi: %s, Chain length: %d\n", 
-          chainorg.get_str().c_str(), multi.get_str().c_str(), chainlength);
-        
-        while(multi  < multiNor)
+        while(multi % 2 == 0 && nOrigin % 4 == 0)
         {
-          multi *= 2;
-          candi.index /= 2;
+          mpz_class nOriginNor = nOrigin / 2 ;
+          CPrimalityTestParamsCuda testParamsNor = testParams;
+
+          if(ProbablePrimeChainTestFastCuda(nOriginNor, testParamsNor, mDepth))
+          {
+            if(TargetGetLength(testParamsNor.nChainLength)>chainlength)
+            {
+              candi.index /= 2;
+              multi = candi.index;
+              multi <<= candi.origin;
+              nOrigin = hash.shash;
+              nOrigin *= multi;
+            }
+            else
+            {
+            break;
+            }
+          }
+          else
+          {
+            break;
+          }
         }
-        isblock = ProbablePrimeChainTestFastCuda(chainorg, testParams, mDepth);
+
+        isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         chainlength = TargetGetLength(testParams.nChainLength);
 
         if(chainlength >= TargetGetLength(blockheader.bits)){
