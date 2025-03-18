@@ -732,7 +732,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           std::cout<<"Submit targetMultiplier "<<targetMultiplier.get_str()<<" primorial"<<hash.primorial.get_str()<<" nPrimechainLength "<<testParams.nChainLength<<" \n";
           LOG_F(1, "Submitting  nPrimeChainLength: %u",  testParams.nChainLength);
           submit->submitBlock(workTemplate, work, dataId);
-          
           std::string chainName = GetPrimeChainName(testParams.nCandidateType,testParams.nChainLength);
           LOG_F(1, "GPU %d found share: %s", mID, chainName.c_str());
           if(isblock){{
