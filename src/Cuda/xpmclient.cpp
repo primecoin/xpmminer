@@ -5,7 +5,7 @@
  *      Author: mad
  */
 
-#include<iostream>
+
 
 #include "xpmclient.h"
 #include "primecoin.h"
