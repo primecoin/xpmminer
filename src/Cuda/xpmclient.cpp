@@ -706,10 +706,11 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         nOrigin = hash.shash;
         nOrigin *= multi;
         
-        testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
+        testParams.nCandidateType = candi.type+1;
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
+       
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
