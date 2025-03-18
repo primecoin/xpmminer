@@ -6,7 +6,7 @@
  */
 
 
- 
+
 #include "xpmclient.h"
 #include "primecoin.h"
 #include "benchmarks.h"
