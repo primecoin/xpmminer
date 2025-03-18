@@ -5,7 +5,7 @@
  *      Author: mad
  */
 
-#include <iostream>
+#include<iostream>#include <iostream>
 
 #include "xpmclient.h"
 #include "primecoin.h"
@@ -710,35 +710,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
         
-        while(multi % 2 == 0 && nOrigin % 4 == 0)
-        {
-          mpz_class nOriginNor = nOrigin / 2 ;
-          CPrimalityTestParamsCuda testParamsNor = testParams;
-
-          if(ProbablePrimeChainTestFastCuda(nOriginNor, testParamsNor, mDepth))
-          {
-            if(TargetGetLength(testParamsNor.nChainLength)>chainlength)
-            {
-              candi.index /= 2;
-              multi = candi.index;
-              multi <<= candi.origin;
-              nOrigin = hash.shash;
-              nOrigin *= multi;
-            }
-            else
-            {
-            break;
-            }
-          }
-          else
-          {
-            break;
-          }
-        }
-
-        isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
-        chainlength = TargetGetLength(testParams.nChainLength);
-
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
@@ -758,6 +729,8 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           work.multiplier[0] = buffer[3];
           std::reverse_copy(buffer+4, buffer+4+buffer[3], work.multiplier+1);
           std::cout<<"Submit targetMultiplier "<<targetMultiplier.get_str()<<" primorial"<<hash.primorial.get_str()<<" nPrimechainLength "<<testParams.nChainLength<<" \n";
+          LOG_F(1, "Submitting  nPrimeChainLength: %u",  testParams.nChainLength);
+          std::cout<<"Submit targetMultiplier "<<targetMultiplier.get_str()<<" primorial "<<hash.primorial.get_str()<<"\n";
           submit->submitBlock(workTemplate, work, dataId);
           
           std::string chainName = GetPrimeChainName(testParams.nCandidateType,testParams.nChainLength);

@@ -8,7 +8,6 @@
 
 
 #include "prime.h"
-#include <iostream>
 
 
 const unsigned int nFractionalBits = 24;
@@ -244,35 +243,3 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
 
   return (nChainLength >= nBits);
 }
-
-// void NormalizeToLongestOrigin(mpz_class& chainorg, mpz_class& multi, CPrimalityTestParamsCuda& testParams, int base)
-// {
-//     unsigned int longestChainLength = TargetGetLength(testParams.nChainLength); 
-//     CPrimalityTestParamsCuda testParamsNormalize = testParams;
-
-//     while (multi % 2 == 0 && chainorg % 4 == 0)
-//     { 
-//         chainorg /= 2; 
-//         std::cout<<"Multiplier can be Normalize "<<multi.get_str()<<"\n";
-//         if (ProbablePrimeChainTestFastCuda(chainorg, testParamsNormalize, base))
-//         {         
-//             if (TargetGetLength(testParamsNormalize.nChainLength) > longestChainLength)
-//             {
-//                 longestChainLength = TargetGetLength(testParamsNormalize.nChainLength);
-//                 multi /= 2;
-//                 std::cout<<"Normalize Multiplier to "<<multi.get_str()<<"\n"; 
-//             } 
-//             else
-//             {   
-//                 chainorg *= 2;
-//                 break;
-//             }
-//         }
-//         else
-//         {   
-//           chainorg *= 2; 
-//           break;
-//         }
-//     }
-//     testParams=testParamsNormalize;
-// }

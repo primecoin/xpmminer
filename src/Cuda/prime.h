@@ -77,4 +77,6 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
 
 
 
+
+
 #endif /* PRIME_H_ */
