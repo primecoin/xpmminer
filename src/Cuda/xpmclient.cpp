@@ -5,7 +5,6 @@
  *      Author: mad
  */
 
-#include <iostream>
 
 #include "xpmclient.h"
 #include "primecoin.h"
@@ -699,9 +698,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           BN_bn2mpi(xxx, buffer);
           work.multiplier[0] = buffer[3];
           std::reverse_copy(buffer+4, buffer+4+buffer[3], work.multiplier+1);
-          LOG_F(1, "Submitting  nPrimeChainLength: %u",  testParams.nChainLength);
           submit->submitBlock(workTemplate, work, dataId);
-          
           std::string chainName = GetPrimeChainName(testParams.nCandidateType,testParams.nChainLength);
           LOG_F(1, "GPU %d found share: %s", mID, chainName.c_str());
           if(isblock){
