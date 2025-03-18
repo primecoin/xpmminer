@@ -151,7 +151,7 @@ static void ProbableCunninghamChainTestFast(const mpz_class& n, bool fSophieGerm
     }
 
     // Fermat test for n first
-    if (!FermatProbablePrimalityTestFast(N, nProbableChainLength, testParams, true))
+    if (!FermatProbablePrimalityTestFast(N, nProbableChainLength, testParams, false))
         return;
 
     // Euler-Lagrange-Lifchitz test for the following numbers in chain
@@ -184,7 +184,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
     mpzOriginMinusOne += X;
   }
   
-  if (!FermatProbablePrimalityTestFast(mpzOriginMinusOne, nProbableChainLength, testParams, true))
+  if (!FermatProbablePrimalityTestFast(mpzOriginMinusOne, nProbableChainLength, testParams, false))
     return;
   TargetIncrementLength(nProbableChainLength);
   
@@ -195,7 +195,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
     mpzOriginPlusOne -= X;
   }
   
-  if (!FermatProbablePrimalityTestFast(mpzOriginPlusOne, nProbableChainLength, testParams, true))
+  if (!FermatProbablePrimalityTestFast(mpzOriginPlusOne, nProbableChainLength, testParams, false))
     return;
   TargetIncrementLength(nProbableChainLength);
   
@@ -227,18 +227,18 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   nChainLength = 0;
   
   // Test for Cunningham Chain of first kind
-  if (nCandidateType == 0)
+  if (nCandidateType == 1)
   {
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
     ProbableCunninghamChainTestFast(mpzOriginMinusOne, true, nChainLength, testParams, base);
   }
-  else if (nCandidateType == 1)
+  else if (nCandidateType == 2)
   {
     // Test for Cunningham Chain of second kind
     mpzOriginPlusOne = mpzPrimeChainOrigin + 1;
     ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, nChainLength, testParams, base);
   }
-  else if (nCandidateType == 2)
+  else if (nCandidateType == 3)
   {
     ProbableBiTwinChainTestFast(mpzPrimeChainOrigin, nChainLength, testParams, base);
   }

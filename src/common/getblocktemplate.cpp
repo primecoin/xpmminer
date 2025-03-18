@@ -264,7 +264,7 @@ void SubmitContext::submitBlock(blktemplate_t *blockTemplate,
     else if ((je = json_object_get(response, "result")) && json_is_null(je))
       fprintf(stdout, "\e[1;32m[RPC SUBMIT] %s\e[0m\n", _response.c_str());
     else
-      fprintf(stdout, "\e[1;33m[RPC SUBMIT] %s\e[0m\n", _response.c_str());
+      fprintf(stdout, "\e[1;33m[RPC SUBMIT] %s\e[0m", _response.c_str());
   }
   
   free(request);

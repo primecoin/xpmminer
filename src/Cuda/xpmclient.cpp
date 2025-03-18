@@ -660,7 +660,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     
     // check candis
     if(candis.size()){
-      mpz_class chainorg;
+      mpz_class nOrigin;
       mpz_class multi;
       for(unsigned i = 0; i < candis.size(); ++i){
         
@@ -673,15 +673,15 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         
         multi = candi.index;
         multi <<= candi.origin;
-        chainorg = hash.shash;
-        chainorg *= multi;
+        nOrigin = hash.shash;
+        nOrigin *= multi;
         
-        testParams.nCandidateType = candi.type;
-        bool isblock = ProbablePrimeChainTestFastCuda(chainorg, testParams, mDepth);
+        testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
+        bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
         if(chainlength >= TargetGetLength(blockheader.bits)){
-          printf("candis[%d] = %s, chainlength %u\n", i, chainorg.get_str(10).c_str(), chainlength);
+          printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
           work.version = blockheader.version;
           char blkhex[128];
@@ -699,14 +699,17 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           work.multiplier[0] = buffer[3];
           std::reverse_copy(buffer+4, buffer+4+buffer[3], work.multiplier+1);
           submit->submitBlock(workTemplate, work, dataId);
-          
-          LOG_F(1, "GPU %d found share: %d-ch type %d", mID, chainlength, candi.type+1);
-          if(isblock)
-            LOG_F(1, "GPU %d found BLOCK!", mID);
-          
+          std::string chainName = GetPrimeChainName(testParams.nCandidateType,testParams.nChainLength);
+          LOG_F(1, "GPU %d found share: %s", mID, chainName.c_str());
+          if(isblock){
+            LOG_F(1, "GPU %d found BLocK!", mID);
+            std::string nbitsTarget =TargetToString(testParams.nBits);
+            LOG_F(1,"Found chain:%s",chainName.c_str());
+            LOG_F(1,"Target (nbits):%s\n----------------------------------------------------------------------",nbitsTarget.c_str());
+          }
         }else if(chainlength < mDepth){
-          LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(chainorg.get_mpz_t(), 2), chainlength, mDepth);
-          LOG_F(WARNING, "origin: %s", chainorg.get_str().c_str());
+          LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(nOrigin.get_mpz_t(), 2), chainlength, mDepth);
+          LOG_F(WARNING, "origin: %s", nOrigin.get_str().c_str());
           LOG_F(WARNING, "type: %u", (unsigned)candi.type);
           LOG_F(WARNING, "multiplier: %u", (unsigned)candi.index);
           LOG_F(WARNING, "layer: %u", (unsigned)candi.origin);
