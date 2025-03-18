@@ -227,18 +227,18 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   nChainLength = 0;
   
   // Test for Cunningham Chain of first kind
-  if (nCandidateType == 0)
+  if (nCandidateType == 1)
   {
     mpzOriginMinusOne = mpzPrimeChainOrigin - 1;
     ProbableCunninghamChainTestFast(mpzOriginMinusOne, true, nChainLength, testParams, base);
   }
-  else if (nCandidateType == 1)
+  else if (nCandidateType == 2)
   {
     // Test for Cunningham Chain of second kind
     mpzOriginPlusOne = mpzPrimeChainOrigin + 1;
     ProbableCunninghamChainTestFast(mpzOriginPlusOne, false, nChainLength, testParams, base);
   }
-  else if (nCandidateType == 2)
+  else if (nCandidateType == 3)
   {
     ProbableBiTwinChainTestFast(mpzPrimeChainOrigin, nChainLength, testParams, base);
   }

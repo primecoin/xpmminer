@@ -5,7 +5,7 @@
  *      Author: mad
  */
 
-
+#include <iostream>
 
 #include "xpmclient.h"
 #include "primecoin.h"
@@ -676,10 +676,11 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         nOrigin = hash.shash;
         nOrigin *= multi;
         
-        testParams.nCandidateType = candi.type;
+        testParams.nCandidateType = candi.type+1;
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
+       
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
@@ -701,7 +702,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           LOG_F(1, "Submitting  nPrimeChainLength: %u",  testParams.nChainLength);
           submit->submitBlock(workTemplate, work, dataId);
           
-          std::string chainName = GetPrimeChainNameCuda(testParams.nCandidateType,testParams.nChainLength);
+          std::string chainName = GetPrimeChainName(testParams.nCandidateType,testParams.nChainLength);
           LOG_F(1, "GPU %d found share: %s", mID, chainName.c_str());
           if(isblock){
             LOG_F(1, "GPU %d found BLocK!", mID);
