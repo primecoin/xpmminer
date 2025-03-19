@@ -176,7 +176,7 @@ void *mine(void *arg)
         for (unsigned i = 0; i < results.size; i++) {
           unsigned chainLength = results.resultChainLength[i];
           ctx->foundChains[chainLength]++;
-          if (chainLength == chainLengthFromBits(work.bits)) {
+          if (chainLength >= chainLengthFromBits(work.bits)) {
             // TODO: check block
             printf("chain found!\n");
             work.nonce = results.resultNonces[i];
