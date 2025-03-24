@@ -165,12 +165,17 @@ void *mine(void *arg)
       work.time = workTemplate->curtime;
       work.bits = *(uint32_t*)workTemplate->diffbits;
       memset(nonceAndHash.get(), 0, sizeof(GPUNonceAndHash)*device.groupsNum);
-
+      cl_int openclError = OpenCLNewBlockPrepare(device, device.groupsNum, work,
+      nonceAndHash.get(), queue.get());
       OpenCLNewBlockPrepare(device, device.groupsNum, work,
                             nonceAndHash.get(), queue.get());
     }
 
     if (OpenCLMiningRound(device, device.groupsNum, results_.get())) {
+      unsigned nTriedMultiplier;
+      mpz_class bnChainOrigin;
+      mpz_class hashMultiplier;
+      mpz_class Multiplier;
       for (unsigned groupIdx = 0; groupIdx < device.groupsNum; groupIdx++) {
         FermatTestResults &results = results_[groupIdx];
         for (unsigned i = 0; i < results.size; i++) {
@@ -179,9 +184,38 @@ void *mine(void *arg)
           if (chainLength >= chainLengthFromBits(work.bits)) {
             // TODO: check block
             printf("chain found!\n");
+            PrimecoinBlockHeader header = work; 
+            uint8_t hash1[32];
+            uint8_t hashData[32];          
+            sha256(hash1, &header, 80);
+            sha256(hashData, hash1, 32);              
+            mpz_class blockHeaderHash;
+            mpz_import(blockHeaderHash.get_mpz_t(),
+                      32 / sizeof(unsigned long),
+                      -1,
+                      sizeof(unsigned long),
+                      -1,
+                      0,
+                      hashData);
+            nTriedMultiplier = results.resultMultipliers[i];
+            Multiplier = nTriedMultiplier * primorial;
+            hashMultiplier = blockHeaderHash * primorial;
+            bnChainOrigin = hashMultiplier;
+            bnChainOrigin *= nTriedMultiplier;
+
+
+
+
+
+            gmp_printf("Origin:%Zd\n", bnChainOrigin.get_mpz_t());
+            gmp_printf("Multiplier = %Zd\n", Multiplier.get_mpz_t());
+            fprintf(stderr, "Candidate Type: %u, Chain Length: %u\n", results.resultTypes[i], chainLength);
+            std::string nbitsTarget = TargetToString(work.bits);
+            fprintf(stderr, "Target (nbits): %s\n", nbitsTarget.c_str());
             work.nonce = results.resultNonces[i];
             copyMultiplierToBlock(work, primorial, results.resultMultipliers[i]);
             ctx->submit->submitBlock(workTemplate, work, dataId); 
+            printf("\n");
           }
         }
       }
