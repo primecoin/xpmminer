@@ -202,11 +202,6 @@ void *mine(void *arg)
             hashMultiplier = blockHeaderHash * primorial;
             bnChainOrigin = hashMultiplier;
             bnChainOrigin *= nTriedMultiplier;
-
-
-
-
-
             gmp_printf("Origin:%Zd\n", bnChainOrigin.get_mpz_t());
             gmp_printf("Multiplier = %Zd\n", Multiplier.get_mpz_t());
             fprintf(stderr, "Candidate Type: %u, Chain Length: %u\n", results.resultTypes[i], chainLength);
