@@ -166,7 +166,6 @@ void *mine(void *arg)
       work.time = workTemplate->curtime;
       work.bits = *(uint32_t*)workTemplate->diffbits;
       memset(nonceAndHash.get(), 0, sizeof(GPUNonceAndHash)*device.groupsNum);
-      
       OpenCLNewBlockPrepare(device, device.groupsNum, work,
                             nonceAndHash.get(), queue.get());
     }
