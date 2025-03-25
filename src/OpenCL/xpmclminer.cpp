@@ -111,6 +111,7 @@ void copyMultiplierToBlock(PrimecoinBlockHeader &header, const mpz_class &primor
   uint8_t buffer[256];
   BIGNUM *xxx = 0;
   mpz_class targetMultiplier = primorial*M;
+  gmp_printf("targetMultiplier = %Zd\n", targetMultiplier.get_mpz_t());
   BN_dec2bn(&xxx, targetMultiplier.get_str().c_str());
   BN_bn2mpi(xxx, buffer);
   header.multiplier[0] = buffer[3];
@@ -165,6 +166,7 @@ void *mine(void *arg)
       work.time = workTemplate->curtime;
       work.bits = *(uint32_t*)workTemplate->diffbits;
       memset(nonceAndHash.get(), 0, sizeof(GPUNonceAndHash)*device.groupsNum);
+      
       OpenCLNewBlockPrepare(device, device.groupsNum, work,
                             nonceAndHash.get(), queue.get());
     }
@@ -196,12 +198,10 @@ void *mine(void *arg)
                       0,
                       hashData);
             nTriedMultiplier = results.resultMultipliers[i];
-            Multiplier = nTriedMultiplier * primorial;
             hashMultiplier = blockHeaderHash * primorial;
             bnChainOrigin = hashMultiplier;
             bnChainOrigin *= nTriedMultiplier;
             gmp_printf("Origin:%Zd\n", bnChainOrigin.get_mpz_t());
-            gmp_printf("Multiplier = %Zd\n", Multiplier.get_mpz_t());
             fprintf(stderr, "Candidate Type: %u, Chain Length: %u\n", results.resultTypes[i], chainLength);
             std::string nbitsTarget = TargetToString(work.bits);
             fprintf(stderr, "Target (nbits): %s\n", nbitsTarget.c_str());
