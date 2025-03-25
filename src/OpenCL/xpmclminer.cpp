@@ -175,7 +175,6 @@ void *mine(void *arg)
       unsigned nTriedMultiplier;
       mpz_class bnChainOrigin;
       mpz_class hashMultiplier;
-      mpz_class Multiplier;
       for (unsigned groupIdx = 0; groupIdx < device.groupsNum; groupIdx++) {
         FermatTestResults &results = results_[groupIdx];
         for (unsigned i = 0; i < results.size; i++) {
