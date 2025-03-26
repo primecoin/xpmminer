@@ -196,8 +196,15 @@ void *mine(void *arg)
             unsigned triedMultiplier = results.resultMultipliers[i];
             mpz_class fixedMultiplier = blockHeaderHash*primorial;     
             mpz_class chainOrigin = fixedMultiplier * triedMultiplier;
+            
+            CPrimalityTestParams testParams(bitsFromDifficulty(10));
+            testParams.candidateType = results.resultTypes[i];
+            
+            ProbablePrimeChainTestFast(chainOrigin, testParams);
+            std::string chainName = GetPrimeChainName(testParams.candidateType, testParams.chainLength);
+            fprintf(stderr, "Found chain: %s\n", chainName.c_str());
+
             gmp_printf("chainOrigin:%Zd\n", chainOrigin.get_mpz_t());
-            fprintf(stderr, "Candidate Type: %u, Chain Length: %u\n", results.resultTypes[i], chainLength);
             std::string nbitsTarget = TargetToString(work.bits);
             fprintf(stderr, "Target (nbits): %s\n", nbitsTarget.c_str());
             copyMultiplierToBlock(work, primorial, results.resultMultipliers[i]);
