@@ -270,6 +270,29 @@ void PrimeMiner::PrintChainStats() {
       mLastStatsTime = now;
   }
 }
+void PrimeMiner::PrintChainStats() {
+  time_t now = time(0);
+  time_t elapsed = now - mLastStatsTime;
+
+  if (elapsed >= 5) { 
+      printf(" ** block: %u, difficulty: %.3lf\n", gbp->getBlockHeight(), gbp->getDifficulty());
+
+      double totalSpeed = 0.0;
+      double averageSpeed = 0.0;
+
+      for (unsigned chIdx = 1; chIdx < MaxChainLength; chIdx++) {
+          if (mFoundChains[chIdx] > 0) {
+              printf("   * chains/%u: %lu %.3lf/sec ", chIdx, mFoundChains[chIdx], mFoundChains[chIdx] / (elapsedTime / 1000000.0));
+              if (chIdx >= 7) {
+                  printf("%.3lf/hour", mFoundChains[chIdx] / (elapsedTime / 1000000.0) * 3600.0);
+              }
+          }
+      }
+      printf("\n");
+      memset(mFoundChains, 0, sizeof(mFoundChains));
+      mLastStatsTime = now;
+  }
+}
 
 void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   cuCtxSetCurrent(_context);
@@ -383,6 +406,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   int loadworkaccount = 0;
   bool run = true;
   this->gbp = gbp;
+  this->gbp = gbp;
   while(run) {
     {
       time_t currtime = time(0);
@@ -397,6 +421,8 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         time2 = currtime;
         testCount = 0;
       }
+      elapsedTime = usDiff(starttimecount, getTimeMark());
+      PrintChainStats();
       elapsedTime = usDiff(starttimecount, getTimeMark());
       PrintChainStats();
     }
@@ -711,6 +737,38 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
+        while(multi % 2 == 0 && nOrigin % 4 == 0)
+        {
+          mpz_class nOriginNormalize = nOrigin / 2 ;
+          CPrimalityTestParamsCuda testParamsNormalize = testParams;
+
+          if(ProbablePrimeChainTestFastCuda(nOriginNormalize, testParamsNormalize, mDepth))
+          {
+            unsigned chainlengthNormalize = TargetGetLength(testParamsNormalize.nChainLength);
+            if( chainlengthNormalize > chainlength )
+            {
+              multi /= 2;
+              chainlength = chainlengthNormalize;
+              testParams = testParamsNormalize;
+              std::cout<<"Normalized nchainLength "<<testParamsNormalize.nChainLength<<"\n";
+              std::cout<<"Normalized Multiplier "<<multi.get_str()<<"\n";
+            }
+            else
+            {
+            break;
+            }
+          }
+        else
+          {
+            break;
+          }
+        }
+
+        if (chainlength > 0 && chainlength < MaxChainLength) {
+          mFoundChains[chainlength]++;
+        }
+        nOrigin = hash.shash;
+        nOrigin *= multi;
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
