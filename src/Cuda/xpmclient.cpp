@@ -694,6 +694,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     // check candis
     if(candis.size()){
       mpz_class nOrigin;
+      mpz_class nOrigin;
       mpz_class multi;
       for(unsigned i = 0; i < candis.size(); ++i){
         
@@ -708,7 +709,11 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         multi <<= candi.origin;
         nOrigin = hash.shash;
         nOrigin *= multi;
+        nOrigin = hash.shash;
+        nOrigin *= multi;
         
+        testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
+        bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
@@ -747,6 +752,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         nOrigin *= multi;
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
+          printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
           work.version = blockheader.version;
           char blkhex[128];
@@ -776,6 +782,8 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           }
           }
         }else if(chainlength < mDepth){
+          LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(nOrigin.get_mpz_t(), 2), chainlength, mDepth);
+          LOG_F(WARNING, "origin: %s", nOrigin.get_str().c_str());
           LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(nOrigin.get_mpz_t(), 2), chainlength, mDepth);
           LOG_F(WARNING, "origin: %s", nOrigin.get_str().c_str());
           LOG_F(WARNING, "type: %u", (unsigned)candi.type);
