@@ -494,7 +494,7 @@ bool MineProbablePrimeChainFast(PrimecoinBlockHeader &header,
       
       return false;
     }
-    
+
     bnChainOrigin = hashMultiplier;
     bnChainOrigin *= nTriedMultiplier;
     nChainLength = 0;
