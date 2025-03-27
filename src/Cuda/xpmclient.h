@@ -8,7 +8,7 @@
 #ifndef XPMCLIENT_H_
 #define XPMCLIENT_H_
 
-
+#include <chrono>
 #include <gmp.h>
 #include <gmpxx.h>
 #include "getblocktemplate.h"
@@ -67,6 +67,19 @@ struct CUDADeviceInfo {
   CUcontext context;
   int majorComputeCapability;
   int minorComputeCapability;
+};
+
+
+struct MineContext {
+  PrimeSource *primeSource;
+  GetBlockTemplateContext *gbp;
+  SubmitContext *submit;  
+  int devicesNum;
+  unsigned threadIdx;
+  uint64_t totalRoundsNum; 
+  uint64_t foundChains[20];
+  double speed;  
+  void *log;
 };
 
 
@@ -180,7 +193,17 @@ public:
     cudaBuffer<uint8_t> output;
     info_t buffer[2];
   };
+
+  uint64_t mFoundChains[MaxChainLength] = {0}; // chaincount
+  time_t mLastStatsTime = 0;                   // counttime
   
+  GetBlockTemplateContext* gbp;  
+  MineContext ctx;             
+  uint64_t foundChains[MaxChainLength]; 
+  MineContext* mineCtx;        
+  double sieveSizeInGb;          
+  uint64_t elapsedTime;          
+
   PrimeMiner(unsigned id, unsigned threads, unsigned sievePerRound, unsigned depth, unsigned LSize);
   ~PrimeMiner();
   
@@ -190,6 +213,7 @@ public:
   
   bool MakeExit;
   void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
+  void PrintChainStats();
   
 private:
   void FermatInit(pipeline_t &fermat, unsigned mfs);  
@@ -231,4 +255,7 @@ private:
   cudaBuffer<uint32_t> hashBuf;
 };
 
+typedef std::chrono::time_point<std::chrono::steady_clock> timeMark;
+timeMark getTimeMark();
+uint64_t usDiff(timeMark first, timeMark second);
 #endif /* XPMCLIENT_H_ */

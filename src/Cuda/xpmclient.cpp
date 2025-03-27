@@ -5,6 +5,7 @@
  *      Author: mad
  */
 
+#include<iostream>
 
 
 #include "xpmclient.h"
@@ -58,7 +59,7 @@ double GetPrimeDifficulty(unsigned int nBits)
     return ((double) nBits / (double) (1 << nFractionalBits));
 }
 
-PrimeMiner::PrimeMiner(unsigned id, unsigned threads, unsigned sievePerRound, unsigned depth, unsigned LSize) {
+PrimeMiner::PrimeMiner(unsigned id, unsigned threads, unsigned sievePerRound, unsigned depth, unsigned LSize)  : gbp(nullptr), sieveSizeInGb(0.0), elapsedTime(0){
   
   mID = id;
   mThreads = threads;
@@ -84,6 +85,8 @@ PrimeMiner::PrimeMiner(unsigned id, unsigned threads, unsigned sievePerRound, un
   
   MakeExit = false;
   
+    memset(foundChains, 0, sizeof(foundChains)); 
+    mineCtx = new MineContext[threads];
 }
 
 PrimeMiner::~PrimeMiner() {
@@ -244,10 +247,34 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
     // printf("fermat: total of %d infos, bsize = %d\n", count, fermat.bsize);
   }
 }
+void PrimeMiner::PrintChainStats() {
+  time_t now = time(0);
+  time_t elapsed = now - mLastStatsTime;
+
+  if (elapsed >= 5) { 
+      printf(" ** block: %u, difficulty: %.3lf\n", gbp->getBlockHeight(), gbp->getDifficulty());
+
+      double totalSpeed = 0.0;
+      double averageSpeed = 0.0;
+
+      for (unsigned chIdx = 1; chIdx < MaxChainLength; chIdx++) {
+          if (mFoundChains[chIdx] > 0) {
+              printf("   * chains/%u: %lu %.3lf/sec ", chIdx, mFoundChains[chIdx], mFoundChains[chIdx] / (elapsedTime / 1000000.0));
+              if (chIdx >= 7) {
+                  printf("%.3lf/hour", mFoundChains[chIdx] / (elapsedTime / 1000000.0) * 3600.0);
+              }
+          }
+      }
+      printf("\n");
+      memset(mFoundChains, 0, sizeof(mFoundChains));
+      mLastStatsTime = now;
+  }
+}
 
 void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   cuCtxSetCurrent(_context);
   time_t starttime = time(0);
+  timeMark starttimecount = getTimeMark();  
   unsigned int dataId;
   bool hasChanged;
   blktemplate_t *workTemplate = 0;
@@ -355,6 +382,8 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
 
   int loadworkaccount = 0;
   bool run = true;
+  this->gbp = gbp;
+  this->gbp = gbp;
   while(run) {
     {
       time_t currtime = time(0);
@@ -369,6 +398,10 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         time2 = currtime;
         testCount = 0;
       }
+      elapsedTime = usDiff(starttimecount, getTimeMark());
+      PrintChainStats();
+      elapsedTime = usDiff(starttimecount, getTimeMark());
+      PrintChainStats();
     }
     
     stats.primeprob = pow(double(primeCount)/double(fermatCount), 1./mDepth)
@@ -675,12 +708,47 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         multi <<= candi.origin;
         nOrigin = hash.shash;
         nOrigin *= multi;
+        nOrigin = hash.shash;
+        nOrigin *= multi;
         
         testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
+        while(multi % 2 == 0 && nOrigin % 4 == 0)
+        {
+          mpz_class nOriginNormalize = nOrigin / 2 ;
+          CPrimalityTestParamsCuda testParamsNormalize = testParams;
+
+          if(ProbablePrimeChainTestFastCuda(nOriginNormalize, testParamsNormalize, mDepth))
+          {
+            unsigned chainlengthNormalize = TargetGetLength(testParamsNormalize.nChainLength);
+            if( chainlengthNormalize > chainlength )
+            {
+              multi /= 2;
+              chainlength = chainlengthNormalize;
+              testParams = testParamsNormalize;
+              std::cout<<"Normalized nchainLength "<<testParamsNormalize.nChainLength<<"\n";
+              std::cout<<"Normalized Multiplier "<<multi.get_str()<<"\n";
+            }
+            else
+            {
+            break;
+            }
+          }
+        else
+          {
+            break;
+          }
+        }
+
+        if (chainlength > 0 && chainlength < MaxChainLength) {
+          mFoundChains[chainlength]++;
+        }
+        nOrigin = hash.shash;
+        nOrigin *= multi;
         if(chainlength >= TargetGetLength(blockheader.bits)){
+          printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
           work.version = blockheader.version;
@@ -698,16 +766,21 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           BN_bn2mpi(xxx, buffer);
           work.multiplier[0] = buffer[3];
           std::reverse_copy(buffer+4, buffer+4+buffer[3], work.multiplier+1);
+          std::cout<<"Submit targetMultiplier "<<targetMultiplier.get_str()<<" primorial"<<hash.primorial.get_str()<<" nPrimechainLength "<<testParams.nChainLength<<" \n";
+          LOG_F(1, "Submitting  nPrimeChainLength : %u",  testParams.nChainLength);
           submit->submitBlock(workTemplate, work, dataId);
           std::string chainName = GetPrimeChainName(testParams.nCandidateType,testParams.nChainLength);
           LOG_F(1, "GPU %d found share: %s", mID, chainName.c_str());
-          if(isblock){
+          if(isblock){{
             LOG_F(1, "GPU %d found BLocK!", mID);
-            std::string nbitsTarget =TargetToString(testParams.nBits);
-            LOG_F(1,"Found chain:%s",chainName.c_str());
-            LOG_F(1,"Target (nbits):%s\n----------------------------------------------------------------------",nbitsTarget.c_str());
+                std::string nbitsTarget =TargetToString(testParams.nBits);
+              LOG_F(1,"Found chain:%s",chainName.c_str());
+              LOG_F(1,"Target (nbits):%s\n--- ---------------------------------------------------------------------",nbitsTarget.c_str());
+          }
           }
         }else if(chainlength < mDepth){
+          LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(nOrigin.get_mpz_t(), 2), chainlength, mDepth);
+          LOG_F(WARNING, "origin: %s", nOrigin.get_str().c_str());
           LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(nOrigin.get_mpz_t(), 2), chainlength, mDepth);
           LOG_F(WARNING, "origin: %s", nOrigin.get_str().c_str());
           LOG_F(WARNING, "type: %u", (unsigned)candi.type);
