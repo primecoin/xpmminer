@@ -111,7 +111,7 @@ void copyMultiplierToBlock(PrimecoinBlockHeader &header, const mpz_class &primor
   uint8_t buffer[256];
   BIGNUM *xxx = 0;
   mpz_class targetMultiplier = primorial*M;
-  gmp_printf("targetMultiplier = %Zd\n", targetMultiplier.get_mpz_t());
+  gmp_printf("Multiplier = %Zd\n", targetMultiplier.get_mpz_t());
   BN_dec2bn(&xxx, targetMultiplier.get_str().c_str());
   BN_bn2mpi(xxx, buffer);
   header.multiplier[0] = buffer[3];
@@ -196,17 +196,18 @@ void *mine(void *arg)
             unsigned triedMultiplier = results.resultMultipliers[i];
             mpz_class fixedMultiplier = blockHeaderHash*primorial;     
             mpz_class chainOrigin = fixedMultiplier * triedMultiplier;
-            
+
             CPrimalityTestParams testParams(bitsFromDifficulty(10));
             testParams.candidateType = results.resultTypes[i];
-            
+
             ProbablePrimeChainTestFast(chainOrigin, testParams);
             std::string chainName = GetPrimeChainName(testParams.candidateType, testParams.chainLength);
             fprintf(stderr, "Found chain: %s\n", chainName.c_str());
 
-            gmp_printf("chainOrigin:%Zd\n", chainOrigin.get_mpz_t());
             std::string nbitsTarget = TargetToString(work.bits);
             fprintf(stderr, "Target (nbits): %s\n", nbitsTarget.c_str());
+
+            gmp_printf("chainOrigin: %Zd\n", chainOrigin.get_mpz_t());
             copyMultiplierToBlock(work, primorial, results.resultMultipliers[i]);
             ctx->submit->submitBlock(workTemplate, work, dataId); 
             printf("\n");
