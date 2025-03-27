@@ -694,7 +694,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     // check candis
     if(candis.size()){
       mpz_class nOrigin;
-      mpz_class nOrigin;
       mpz_class multi;
       for(unsigned i = 0; i < candis.size(); ++i){
         
@@ -712,8 +711,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         nOrigin = hash.shash;
         nOrigin *= multi;
         
-        testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
-        bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
