@@ -270,29 +270,6 @@ void PrimeMiner::PrintChainStats() {
       mLastStatsTime = now;
   }
 }
-void PrimeMiner::PrintChainStats() {
-  time_t now = time(0);
-  time_t elapsed = now - mLastStatsTime;
-
-  if (elapsed >= 5) { 
-      printf(" ** block: %u, difficulty: %.3lf\n", gbp->getBlockHeight(), gbp->getDifficulty());
-
-      double totalSpeed = 0.0;
-      double averageSpeed = 0.0;
-
-      for (unsigned chIdx = 1; chIdx < MaxChainLength; chIdx++) {
-          if (mFoundChains[chIdx] > 0) {
-              printf("   * chains/%u: %lu %.3lf/sec ", chIdx, mFoundChains[chIdx], mFoundChains[chIdx] / (elapsedTime / 1000000.0));
-              if (chIdx >= 7) {
-                  printf("%.3lf/hour", mFoundChains[chIdx] / (elapsedTime / 1000000.0) * 3600.0);
-              }
-          }
-      }
-      printf("\n");
-      memset(mFoundChains, 0, sizeof(mFoundChains));
-      mLastStatsTime = now;
-  }
-}
 
 void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   cuCtxSetCurrent(_context);
@@ -716,7 +693,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     
     // check candis
     if(candis.size()){
-      mpz_class nOrigin;
       mpz_class nOrigin;
       mpz_class multi;
       for(unsigned i = 0; i < candis.size(); ++i){
