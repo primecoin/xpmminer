@@ -175,9 +175,9 @@ bool updateBlock(PrimecoinBlockHeader *header,
                  CPrimalityTestParams &testParams,
                  unsigned nonceIncrement = 1);
 
-unsigned int TargetGetFractional(unsigned int nBits) ;
+unsigned int TargetGetFractional(unsigned int nBits);
 
-std::string TargetToString(unsigned int nBits) ;
+std::string TargetToString(unsigned int nBits);
 
 std::string GetPrimeChainName(unsigned int nChainType, unsigned int nChainLength) ;
 
