@@ -761,16 +761,13 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           submit->submitBlock(workTemplate, work, dataId);
           std::string chainName = GetPrimeChainName(testParams.nCandidateType,testParams.nChainLength);
           LOG_F(1, "GPU %d found share: %s", mID, chainName.c_str());
-          if(isblock){{
+          if(isblock){
             LOG_F(1, "GPU %d found BLocK!", mID);
                 std::string nbitsTarget =TargetToString(testParams.nBits);
               LOG_F(1,"Found chain:%s",chainName.c_str());
               LOG_F(1,"Target (nbits):%s\n--- ---------------------------------------------------------------------",nbitsTarget.c_str());
           }
-          }
         }else if(chainlength < mDepth){
-          LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(nOrigin.get_mpz_t(), 2), chainlength, mDepth);
-          LOG_F(WARNING, "origin: %s", nOrigin.get_str().c_str());
           LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(nOrigin.get_mpz_t(), 2), chainlength, mDepth);
           LOG_F(WARNING, "origin: %s", nOrigin.get_str().c_str());
           LOG_F(WARNING, "type: %u", (unsigned)candi.type);
