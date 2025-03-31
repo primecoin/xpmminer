@@ -383,7 +383,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   int loadworkaccount = 0;
   bool run = true;
   this->gbp = gbp;
-  this->gbp = gbp;
   while(run) {
     {
       time_t currtime = time(0);
@@ -398,8 +397,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         time2 = currtime;
         testCount = 0;
       }
-      elapsedTime = usDiff(starttimecount, getTimeMark());
-      PrintChainStats();
       elapsedTime = usDiff(starttimecount, getTimeMark());
       PrintChainStats();
     }
@@ -708,8 +705,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         multi <<= candi.origin;
         nOrigin = hash.shash;
         nOrigin *= multi;
-        nOrigin = hash.shash;
-        nOrigin *= multi;
         
         testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
@@ -728,8 +723,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
               multi /= 2;
               chainlength = chainlengthNormalize;
               testParams = testParamsNormalize;
-              std::cout<<"Normalized nchainLength "<<testParamsNormalize.nChainLength<<"\n";
-              std::cout<<"Normalized Multiplier "<<multi.get_str()<<"\n";
             }
             else
             {
@@ -749,7 +742,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         nOrigin *= multi;
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
-          printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
           work.version = blockheader.version;
           char blkhex[128];
@@ -766,8 +758,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           BN_bn2mpi(xxx, buffer);
           work.multiplier[0] = buffer[3];
           std::reverse_copy(buffer+4, buffer+4+buffer[3], work.multiplier+1);
-          std::cout<<"Submit targetMultiplier "<<targetMultiplier.get_str()<<" primorial"<<hash.primorial.get_str()<<" nPrimechainLength "<<testParams.nChainLength<<" \n";
-          LOG_F(1, "Submitting  nPrimeChainLength : %u",  testParams.nChainLength);
           submit->submitBlock(workTemplate, work, dataId);
           std::string chainName = GetPrimeChainName(testParams.nCandidateType,testParams.nChainLength);
           LOG_F(1, "GPU %d found share: %s", mID, chainName.c_str());
