@@ -1,0 +1,1 @@
+/usr/bin/c++  -std=c++0x -O3 -DNDEBUG -rdynamic CMakeFiles/xpmclminer.dir/xpmclminer.cpp.o CMakeFiles/xpmclminer.dir/benchmarks.cpp.o CMakeFiles/xpmclminer.dir/utils.cpp.o -o xpmclminer  ../common/libcommon.a ../blkmaker/libblkmaker.a -lgmp -lgmpxx -lssl -lcrypto -lcurl -ljansson -lOpenCL -lpthread -ldl 
