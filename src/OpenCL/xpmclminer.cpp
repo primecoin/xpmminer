@@ -91,21 +91,6 @@ void primorialsPrint(unsigned count)
   }
 }
 
-
-struct MineContext {
-  PrimeSource *primeSource;
-  GetBlockTemplateContext *gbp;
-  SubmitContext *submit;  
-  unsigned threadIdx;
-  OpenCLPlatrormContext *platform;
-  OpenCLDeviceContext *device;
-  uint64_t totalRoundsNum; 
-  uint64_t foundChains[20];
-  double speed;  
-  void *log;
-};
-
-
 void copyMultiplierToBlock(PrimecoinBlockHeader &header, const mpz_class &primorial, unsigned M)
 {
   uint8_t buffer[256];
@@ -117,7 +102,6 @@ void copyMultiplierToBlock(PrimecoinBlockHeader &header, const mpz_class &primor
   header.multiplier[0] = buffer[3];
   std::reverse_copy(buffer+4, buffer+4+buffer[3], header.multiplier+1);
 }
-
 
 void *mine(void *arg)
 {
@@ -443,35 +427,7 @@ int main(int argc, char **argv)
   unsigned counter = 0;
   while (true) {
     xsleep(5);
-    
-    uint64_t foundChains[MaxChainLength];
-    double speed = 0.0;
-    double averageSpeed = 0.0;
-    memset(foundChains, 0, sizeof(foundChains));
-
-    printf(" ** block: %u, difficulty: %.3lf", gbp.getBlockHeight(), gbp.getDifficulty());
-    timeMark currentPoint = getTimeMark();    
-    uint64_t elapsedTime = usDiff(workBeginPoint, currentPoint);
-    for (int i = 0; i < ctx.devicesNum; i++) {
-      for (unsigned chIdx = 1; chIdx < MaxChainLength; chIdx++)
-        foundChains[chIdx] += mineCtx[i].foundChains[chIdx];
-      
-      double threadAvgSpeed = (sieveSizeInGb*mineCtx[i].totalRoundsNum) / (elapsedTime / 1000000.0);
-      speed += mineCtx[i].speed;
-      averageSpeed += threadAvgSpeed;
-
-      printf("[%u] %.3lfG, average: %.3lfG", i+1, mineCtx[i].speed, threadAvgSpeed);
-    }
-  
-    printf(" * speed: %.3lfG, average: %.3lfG\n", speed, averageSpeed);
-    unsigned chIdx;
-    for (chIdx = 1; chIdx < MaxChainLength && foundChains[chIdx]; chIdx++) {
-
-      printf("   * chains/%u: %llu %.3lf/sec ",
-              chIdx, foundChains[chIdx], foundChains[chIdx] / (elapsedTime / 1000000.0));
-      if (chIdx >= 7)
-        printf("%.3lf/hour ", foundChains[chIdx] / (elapsedTime / 1000000.0) * 3600.0);
-    }
+    printMiningStats(workBeginPoint, mineCtx, ctx.devicesNum, sieveSizeInGb, gbp.getBlockHeight(), gbp.getDifficulty());
 
     // Workaround about AMD Catalyst bug (prevents performance dropping on
     // Multi-GPU configurations
