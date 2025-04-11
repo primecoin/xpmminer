@@ -1,0 +1,2 @@
+/usr/bin/ar qc libblkmaker.a CMakeFiles/blkmaker.dir/base58.c.o CMakeFiles/blkmaker.dir/blkmaker.c.o CMakeFiles/blkmaker.dir/blkmaker_jansson.c.o CMakeFiles/blkmaker.dir/blktemplate.c.o CMakeFiles/blkmaker.dir/hex.c.o
+/usr/bin/ranlib libblkmaker.a
