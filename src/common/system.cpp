@@ -81,6 +81,13 @@ void xsleep(unsigned seconds)
 
 void printMiningStats(timeMark workBeginPoint, MineContext* mineCtx, int threadsNum, double sieveSizeInGb, unsigned blockHeight, double difficulty)
 {
+    static timeMark lastPrintTime = getTimeMark();
+    uint64_t timeElapsed = usDiff(lastPrintTime, getTimeMark());
+    if (timeElapsed < 60000000) {  
+        return;
+    }
+    lastPrintTime = getTimeMark();
+
     printf(" ** block: %u, difficulty: %.3lf\n", blockHeight, difficulty);
     
     timeMark currentPoint = getTimeMark();    
@@ -110,5 +117,5 @@ void printMiningStats(timeMark workBeginPoint, MineContext* mineCtx, int threads
         if (chIdx >= 7)
             printf("%.3lf/hour ", chainsPerSec * 3600.0);
     }
-    printf("\n");
+    printf("\n\n");
 }

@@ -476,7 +476,6 @@ int main(int argc, char **argv)
   }
 
   while (true) {
-    xsleep(5);  
     printMiningStats(workBeginPoint, mineCtx, gThreadsNum, sieveSizeInGb, ctx.getBlockHeight(), ctx.getDifficulty());
   }
   
