@@ -255,18 +255,6 @@ void benchmark(double difficulty)
   }
 }
 
-
-struct MineContext {
-  PrimeSource *primeSource;
-  GetBlockTemplateContext *gbp;
-  SubmitContext *submit;
-  unsigned threadIdx;
-  uint64_t totalRoundsNum; 
-  uint64_t foundChains[20];
-  double speed;
-  void *log;
-};
-
 void *mine(void *arg)
 {
   MineContext *ctx = (MineContext*)arg;
@@ -488,35 +476,7 @@ int main(int argc, char **argv)
   }
 
   while (true) {
-    xsleep(5);  
-    uint64_t foundChains[MaxChainLength];
-    double speed = 0.0;
-    double averageSpeed = 0.0;
-    memset(foundChains, 0, sizeof(foundChains));
-
-    printf(" ** block: %u, difficulty: %.3lf\n", ctx.getBlockHeight(), ctx.getDifficulty());
-    timeMark currentPoint = getTimeMark();    
-    uint64_t elapsedTime = usDiff(workBeginPoint, currentPoint);
-    for (int i = 0; i < gThreadsNum; i++) {
-      for (unsigned chIdx = 1; chIdx < MaxChainLength; chIdx++)
-        foundChains[chIdx] += mineCtx[i].foundChains[chIdx];
-      
-      double threadAvgSpeed = (sieveSizeInGb*mineCtx[i].totalRoundsNum) / (elapsedTime / 1000000.0);
-      speed += mineCtx[i].speed;
-      averageSpeed += threadAvgSpeed;
-
-      printf("    [thread %u] %.3lfG, average: %.3lfG\n", i+1, mineCtx[i].speed, threadAvgSpeed);
-    }
-
-    printf(" ** total speed: %.3lfG, average: %.3lfG\n", speed, averageSpeed);
-    unsigned chIdx;
-    for (chIdx = 1; chIdx < MaxChainLength && foundChains[chIdx]; chIdx++) {
-      printf("   * chains/%u: %llu %.3lf/sec ",
-              chIdx, foundChains[chIdx], foundChains[chIdx] / (elapsedTime / 1000000.0));
-      if (chIdx >= 7)
-        printf("%.3lf/hour ", foundChains[chIdx] / (elapsedTime / 1000000.0) * 3600.0);
-      printf("\n");
-    }
+    printMiningStats(workBeginPoint, mineCtx, gThreadsNum, sieveSizeInGb, ctx.getBlockHeight(), ctx.getDifficulty());
   }
   
   return 0;
