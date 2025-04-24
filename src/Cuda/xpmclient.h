@@ -15,6 +15,7 @@
 #include "cudautil.h"
 #include "uint256.h"
 #include "sha256.h"
+#include "system.h"
 
 #define FERMAT_PIPELINES 2
 
@@ -229,6 +230,8 @@ private:
   CUfunction mFermatCheck;
   info_t final;
   cudaBuffer<uint32_t> hashBuf;
+  timeMark workBeginPoint;
+  ::MineContext mineCtx;
 };
 
 #endif /* XPMCLIENT_H_ */

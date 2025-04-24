@@ -428,7 +428,7 @@ int main(int argc, char **argv)
   unsigned counter = 0;
   while (true) {
     xsleep(5);
-    printMiningStats(workBeginPoint, mineCtx, ctx.devicesNum, sieveSizeInGb, gbp.getBlockHeight(), gbp.getDifficulty());
+    printMiningStats(workBeginPoint, mineCtx, ctx.devicesNum, sieveSizeInGb, gbp.getBlockHeight(), gbp.getDifficulty(), 1);
 
     // Workaround about AMD Catalyst bug (prevents performance dropping on
     // Multi-GPU configurations
