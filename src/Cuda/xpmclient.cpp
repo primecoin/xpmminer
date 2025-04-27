@@ -680,6 +680,33 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
+        while(multi % 2 == 0 && nOrigin % 4 == 0)
+        {
+          mpz_class nOriginNormalize = nOrigin / 2 ;
+          CPrimalityTestParamsCuda testParamsNormalize = testParams;
+
+          if(ProbablePrimeChainTestFastCuda(nOriginNormalize, testParamsNormalize, mDepth))
+          {
+            unsigned chainlengthNormalize = TargetGetLength(testParamsNormalize.nChainLength);
+            if( chainlengthNormalize > chainlength )
+            {
+              multi /= 2;
+              chainlength = chainlengthNormalize;
+              testParams = testParamsNormalize;
+            }
+            else
+            {
+            break;
+            }
+          }
+        else
+          {
+            break;
+          }
+        }
+        nOrigin = hash.shash;
+        nOrigin *= multi;
+        
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
           PrimecoinBlockHeader work;
