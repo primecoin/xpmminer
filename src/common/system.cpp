@@ -108,6 +108,7 @@ void printMiningStats(timeMark workBeginPoint, MineContext* mineCtx, int threads
     }
     
     printf(" ** total speed: %.3lfG, average: %.3lfG\n", speed, averageSpeed);
+
     unsigned chIdx = 1;
     if(printType == 2)
     chIdx = 4;
