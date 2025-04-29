@@ -687,33 +687,6 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
 
-        while(multi % 2 == 0 && nOrigin % 4 == 0)
-        {
-          mpz_class nOriginNormalize = nOrigin / 2 ;
-          CPrimalityTestParamsCuda testParamsNormalize = testParams;
-
-          if(ProbablePrimeChainTestFastCuda(nOriginNormalize, testParamsNormalize, mDepth))
-          {
-            unsigned chainlengthNormalize = TargetGetLength(testParamsNormalize.nChainLength);
-            if(chainlengthNormalize > chainlength)
-            {
-              multi /= 2;
-              chainlength = chainlengthNormalize;
-              testParams = testParamsNormalize;
-            }
-            else
-            {
-              break;
-            }
-          }
-          else
-          {
-            break;
-          }
-        }
-        nOrigin = hash.shash;
-        nOrigin *= multi;
-
         // Update chain stats for all found chains
         if(chainlength > 0) {
             // Update stats for the found chain and all shorter ones
