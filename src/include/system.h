@@ -43,5 +43,5 @@ const char *installPrefix();
 const char *buildPath(PathTy type, const char *fileName);
 void xsleep(unsigned seconds);
 
-void printMiningStats(timeMark workBeginPoint, MineContext* mineCtx, int threadsNum, double sieveSizeInGb, unsigned blockHeight, double difficulty);
+void printMiningStats(timeMark workBeginPoint, MineContext* mineCtx, int threadsNum, double sieveSizeInGb, unsigned blockHeight, double difficulty, int printType);
 #endif // SYSTEM_H
