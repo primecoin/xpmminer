@@ -262,16 +262,11 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   stats.primeprob = 0;
   stats.cpd = 0;
 
-   // Initialize MineContext
-   memset(&mineCtx, 0, sizeof(MineContext));
-   double sieveSizeInGb = (double)(mConfig.SIZE * 32 * mConfig.STRIPES) / (1024.0 * 1024.0 * 1024.0);
-   timeMark workBeginPoint = getTimeMark();
-
   // Initialize MineContext
   memset(&mineCtx, 0, sizeof(MineContext));
   double sieveSizeInGb = (double)(mConfig.SIZE * 32 * mConfig.STRIPES) / (1024.0 * 1024.0 * 1024.0);
   timeMark workBeginPoint = getTimeMark();
-  
+
   const unsigned mPrimorial = 13;
   uint64_t fermatCount = 1;
   uint64_t primeCount = 1;
