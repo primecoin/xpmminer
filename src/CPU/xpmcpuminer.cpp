@@ -47,7 +47,7 @@ void initCmdLineOptions(option *options)
   options[clDebug] = {"debug", no_argument, 0, 0};
   options[clThreadsNum] = {"threads", required_argument, &gThreadsNum, 0};
   options[clBenchmark] = {"benchmark", no_argument, 0, 'b'};
-  options[clExtensionsNum] = {"extensions-num", required_argument, &gExtensionsNum, 0};  
+  options[clExtensionsNum] = {"extensions-num", required_argument, &gExtensionsNum, 0};
   options[clPrimorial] = {"primorial", required_argument, &gPrimorial, 0};
   options[clSieveSize] = {"sieve-size", required_argument, &gSieveSize, 0};
   options[clWeaveDepth] = {"weave-depth", required_argument, &gWeaveDepth, 0};
@@ -476,7 +476,7 @@ int main(int argc, char **argv)
   }
 
   while (true) {
-    printMiningStats(workBeginPoint, mineCtx, gThreadsNum, sieveSizeInGb, ctx.getBlockHeight(), ctx.getDifficulty());
+    printMiningStats(workBeginPoint, mineCtx, gThreadsNum, sieveSizeInGb, ctx.getBlockHeight(), ctx.getDifficulty(), 1);
   }
   
   return 0;
