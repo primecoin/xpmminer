@@ -79,7 +79,7 @@ void xsleep(unsigned seconds)
 #endif   
 }
 
-void printMiningStats(timeMark workBeginPoint, MineContext* mineCtx, int threadsNum, double sieveSizeInGb, unsigned blockHeight, double difficulty, int printType)
+void printMiningStats(timeMark workBeginPoint, MineContext* mineCtx, int threadsNum, double sieveSizeInGb, unsigned blockHeight, double difficulty, unsigned startChainIndex)
 {
     static timeMark lastPrintTime = getTimeMark();
     uint64_t timeElapsed = usDiff(lastPrintTime, getTimeMark());
@@ -109,10 +109,8 @@ void printMiningStats(timeMark workBeginPoint, MineContext* mineCtx, int threads
     
     printf(" ** total speed: %.3lfG, average: %.3lfG\n", speed, averageSpeed);
 
-    unsigned chIdx = 1;
-    if(printType == 2)
-    chIdx = 4;
-    for (chIdx; chIdx < MaxChainLength && foundChains[chIdx]; chIdx++) {
+    unsigned chIdx;
+    for (chIdx = startChainIndex; chIdx < MaxChainLength && foundChains[chIdx]; chIdx++) {
         double chainsPerSec = foundChains[chIdx] / (elapsedTime / 1000000.0);
         printf("   * chains/%u: %lu %.3lf/sec ",
                 chIdx, foundChains[chIdx], chainsPerSec);

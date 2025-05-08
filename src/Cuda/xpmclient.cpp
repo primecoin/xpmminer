@@ -694,7 +694,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
               mineCtx.foundChains[k]++;
           }
           mineCtx.foundChains[chainlength]++;
-        } 
+        }
 
         if(chainlength >= TargetGetLength(blockheader.bits)){
           printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
@@ -752,7 +752,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     MineContext* mineCtxArray = &mineCtx;  // Create a pointer to our single MineContext
     printMiningStats(workBeginPoint, mineCtxArray, 1, sieveSizeInGb, 
                     workTemplate ? workTemplate->height : 0, 
-                    GetPrimeDifficulty(blockheader.bits), 2);
+                    GetPrimeDifficulty(blockheader.bits), 4);
     
     if(MakeExit)
       break;
