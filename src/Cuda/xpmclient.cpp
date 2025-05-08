@@ -10,7 +10,6 @@
  #include "xpmclient.h"
  #include "primecoin.h"
  #include "benchmarks.h"
- #include "system.h"
  #include <getopt.h>
  #include <fstream>
  #include <set>
@@ -252,7 +251,6 @@
    unsigned int dataId;
    bool hasChanged;
    blktemplate_t *workTemplate = 0;
-   MineContext mineCtx;   
  
    stats_t stats;
    stats.id = mID;
@@ -260,11 +258,6 @@
    stats.fps = 0;
    stats.primeprob = 0;
    stats.cpd = 0;
-
-  // Initialize MineContext
-  memset(&mineCtx, 0, sizeof(MineContext));
-  double sieveSizeInGb = (double)(mConfig.SIZE * 32 * mConfig.STRIPES) / (1024.0 * 1024.0 * 1024.0);
-  timeMark workBeginPoint = getTimeMark();   
    
    const unsigned mPrimorial = 13;
    uint64_t fermatCount = 1;
@@ -686,15 +679,6 @@
          testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
          bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
          unsigned chainlength = TargetGetLength(testParams.nChainLength);
-
-        // Update chain stats for all found chains
-        if(chainlength > 0) {
-          // Update stats for the found chain and all shorter ones
-          for(unsigned k = 1; k < chainlength; k++) {
-              mineCtx.foundChains[k]++;
-          }
-          mineCtx.foundChains[chainlength]++;
-        }         
  
          if(chainlength >= TargetGetLength(blockheader.bits)){
            printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
@@ -743,16 +727,6 @@
          }
        }
      }
-
-    // Update mining stats
-    mineCtx.speed = (double)testCount / 1000000.0;  // Convert to millions
-    mineCtx.totalRoundsNum++;
-
-    // Print mining stats
-    MineContext* mineCtxArray = &mineCtx;  // Create a pointer to our single MineContext
-    printMiningStats(workBeginPoint, mineCtxArray, 1, sieveSizeInGb, 
-                    workTemplate ? workTemplate->height : 0, 
-                    GetPrimeDifficulty(blockheader.bits), 4);     
  
      if(MakeExit)
        break;
