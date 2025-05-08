@@ -15,6 +15,7 @@
 #include "cudautil.h"
 #include "uint256.h"
 #include "sha256.h"
+#include "system.h"
 
 #define FERMAT_PIPELINES 2
 
@@ -192,7 +193,7 @@ public:
   void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
   
 private:
-  void FermatInit(pipeline_t &fermat, unsigned mfs);  
+  void FermatInit(pipeline_t &fermat, unsigned mfs);
   
   void FermatDispatch(pipeline_t &fermat,
                       cudaBuffer<fermat_t>  sieveBuffers[SW][FERMAT_PIPELINES][2],
@@ -203,7 +204,7 @@ private:
                       uint64_t &testCount,
                       uint64_t &fermatCount,
                       CUfunction fermatKernel,
-                      unsigned sievePerRound);  
+                      unsigned sievePerRound);
   
   
   unsigned mID;
@@ -229,6 +230,8 @@ private:
   CUfunction mFermatCheck;
   info_t final;
   cudaBuffer<uint32_t> hashBuf;
+  timeMark workBeginPoint;
+  ::MineContext mineCtx;
 };
 
 #endif /* XPMCLIENT_H_ */
