@@ -674,8 +674,8 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         multi = candi.index;
         multi <<= candi.origin;
         nOrigin = hash.shash;
-        nOrigin *= multi; 
-
+        nOrigin *= multi;
+           
         testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);

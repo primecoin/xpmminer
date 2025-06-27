@@ -10,6 +10,7 @@
 #include "prime.h"
 
 
+
 const unsigned int nFractionalBits = 24;
 unsigned int nTargetInitialLength = 7; // initial chain length target
 unsigned int nTargetMinLength = 6; // minimum chain length target
@@ -240,8 +241,10 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   {
     ProbableBiTwinChainTestFast(mpzPrimeChainOrigin, nChainLength, testParams, base);
   }
+
   return (nChainLength >= nBits);
 }
+
 
 
 
