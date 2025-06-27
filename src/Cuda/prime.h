@@ -65,7 +65,7 @@ inline void mpz_set_uint256(mpz_t r, uint256& u)
 }
 
 bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrimalityTestParamsCuda& testParams, int base);
-
+bool FermatProbablePrimalityTestFastCuda(const mpz_class& n, unsigned int& nLength, CPrimalityTestParamsCuda& testParams, bool fFastFail );
 
 
 

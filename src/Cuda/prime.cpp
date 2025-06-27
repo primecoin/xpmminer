@@ -8,7 +8,7 @@
 
 
 #include "prime.h"
-
+#include "iostream"
 
 
 const unsigned int nFractionalBits = 24;
@@ -41,7 +41,7 @@ static const mpz_class mpzTwo = 2;
 // Check Fermat probable primality test (2-PRP): 2 ** (n-1) = 1 (mod n)
 // true: n is probable prime
 // false: n is composite; set fractional length in the nLength output
-static bool FermatProbablePrimalityTestFast(const mpz_class& n, unsigned int& nLength, CPrimalityTestParamsCuda& testParams, bool fFastFail = false)
+bool FermatProbablePrimalityTestFastCuda(const mpz_class& n, unsigned int& nLength, CPrimalityTestParamsCuda& testParams, bool fFastFail = false)
 {
     mpz_class& mpzNMinusOne = testParams.mpzNMinusOne;
     mpz_class& mpzE = testParams.mpzE;
@@ -59,6 +59,7 @@ static bool FermatProbablePrimalityTestFast(const mpz_class& n, unsigned int& nL
     unsigned int nShiftCount = (1U << (nTrailingZeros - 1)) - 1;
     mpzBase = mpzTwo << nShiftCount;
     mpz_powm(mpzR.get_mpz_t(), mpzBase.get_mpz_t(), mpzE.get_mpz_t(), n.get_mpz_t());
+    //std::cout<<"Fermart result="<<mpzR.get_str()<<" Origin="<<n.get_str()<<std::endl;
     if ((mpzR == 1 || mpzR == mpzNMinusOne))
         return true;
     if ((fFastFail))
@@ -151,7 +152,7 @@ static void ProbableCunninghamChainTestFast(const mpz_class& n, bool fSophieGerm
     }
 
     // Fermat test for n first
-    if (!FermatProbablePrimalityTestFast(N, nProbableChainLength, testParams, false))
+    if (!FermatProbablePrimalityTestFastCuda(N, nProbableChainLength, testParams, false))
         return;
 
     // Euler-Lagrange-Lifchitz test for the following numbers in chain
@@ -176,7 +177,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
   nProbableChainLength = (base-base%2) << nFractionalBits;
   base /= 2;
   int X = (1 << base) - 1;
-  
+  //std::cout<<"base= "<<base<<" origin= "<<mpzOrigin.get_str()<<std::endl;
   // Fermat test for origin-1 first
   mpzOriginMinusOne = mpzOrigin - 1;
   if (base > 0) {
@@ -184,7 +185,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
     mpzOriginMinusOne += X;
   }
   
-  if (!FermatProbablePrimalityTestFast(mpzOriginMinusOne, nProbableChainLength, testParams, false))
+  if (!FermatProbablePrimalityTestFastCuda(mpzOriginMinusOne, nProbableChainLength, testParams, false))
     return;
   TargetIncrementLength(nProbableChainLength);
   
@@ -195,7 +196,7 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
     mpzOriginPlusOne -= X;
   }
   
-  if (!FermatProbablePrimalityTestFast(mpzOriginPlusOne, nProbableChainLength, testParams, false))
+  if (!FermatProbablePrimalityTestFastCuda(mpzOriginPlusOne, nProbableChainLength, testParams, false))
     return;
   TargetIncrementLength(nProbableChainLength);
   
@@ -242,7 +243,6 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   {
     ProbableBiTwinChainTestFast(mpzPrimeChainOrigin, nChainLength, testParams, base);
   }
-  
   return (nChainLength >= nBits);
 }
 

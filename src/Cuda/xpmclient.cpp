@@ -674,41 +674,49 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         multi = candi.index;
         multi <<= candi.origin;
         nOrigin = hash.shash;
-        nOrigin *= multi;
-        
+        nOrigin *= multi; 
         testParams.nCandidateType = candi.type+1;// nCandidateType must follow chain type convention of node
         bool isblock = ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
         unsigned chainlength = TargetGetLength(testParams.nChainLength);
-
-        while(multi % 2 == 0 && nOrigin % 4 == 0)
-        {
-          mpz_class nOriginNormalize = nOrigin / 2 ;
-          CPrimalityTestParamsCuda testParamsNormalize = testParams;
-
-          if(ProbablePrimeChainTestFastCuda(nOriginNormalize, testParamsNormalize, mDepth))
+          while(multi % 2 == 0 && nOrigin % 4 == 0)
           {
-            unsigned chainlengthNormalize = TargetGetLength(testParamsNormalize.nChainLength);
-            if( chainlengthNormalize > chainlength )
-            {
-              multi /= 2;
-              chainlength = chainlengthNormalize;
-              testParams = testParamsNormalize;
-            }
-            else
-            {
-            break;
-            }
+              mpz_class nOriginNormalize = nOrigin / 2;
+              CPrimalityTestParamsCuda testParamsNormalize = testParams;
+          
+              if(ProbablePrimeChainTestFastCuda(nOriginNormalize, testParamsNormalize, mDepth))
+              {
+                  if((testParams.nCandidateType == 1 && FermatProbablePrimalityTestFastCuda(nOriginNormalize - 1, chainlength, testParamsNormalize, false)) ||
+                     (testParams.nCandidateType == 2 && FermatProbablePrimalityTestFastCuda(nOriginNormalize + 1, chainlength, testParamsNormalize, false)) ||
+                     (testParams.nCandidateType == 3 && FermatProbablePrimalityTestFastCuda(nOriginNormalize - 1, chainlength, testParamsNormalize, false) && FermatProbablePrimalityTestFastCuda(nOriginNormalize + 1, chainlength, testParamsNormalize, false)))
+                  {
+                      unsigned chainlengthNormalize = TargetGetLength(testParamsNormalize.nChainLength);
+                      if(chainlengthNormalize > chainlength)
+                      {
+                          multi /= 2;
+                          nOrigin = nOriginNormalize;
+                          chainlength = chainlengthNormalize;
+                          testParams = testParamsNormalize;
+                      }
+                      else
+                      {
+                          break;
+                      }
+                  }
+                  else
+                  {
+                      break;
+                  }
+              }
+              else
+              {
+                  break;
+              }
           }
-        else
-          {
-            break;
-          }
-        }
         nOrigin = hash.shash;
         nOrigin *= multi;
-        
-        if(chainlength >= TargetGetLength(blockheader.bits)){
-          printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
+        ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
+        if(testParams.nChainLength >= blockheader.bits){
+          printf("\ncandis[%d] = %s, chainlength %u, depth %u header %s \n", i, nOrigin.get_str(10).c_str(), chainlength, mDepth, hash.shash.get_str(16).c_str());
           PrimecoinBlockHeader work;
           work.version = blockheader.version;
           char blkhex[128];
@@ -733,6 +741,10 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
             std::string nbitsTarget =TargetToString(testParams.nBits);
             LOG_F(1,"Found chain:%s",chainName.c_str());
             LOG_F(1,"Target (nbits):%s\n----------------------------------------------------------------------",nbitsTarget.c_str());
+          }
+          else{
+          std::string nbitsTarget =TargetToString(testParams.nBits);
+          LOG_F(1,"Target (nbits):%s\n----------------------------------------------------------------------",nbitsTarget.c_str());
           }
         }else if(chainlength < mDepth){
           LOG_F(WARNING, "ProbablePrimeChainTestFast %ubits %d/%d", (unsigned)mpz_sizeinbase(nOrigin.get_mpz_t(), 2), chainlength, mDepth);
