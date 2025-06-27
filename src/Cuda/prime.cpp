@@ -8,7 +8,6 @@
 
 
 #include "prime.h"
-#include "iostream"
 
 
 const unsigned int nFractionalBits = 24;
@@ -59,7 +58,6 @@ bool FermatProbablePrimalityTestFastCuda(const mpz_class& n, unsigned int& nLeng
     unsigned int nShiftCount = (1U << (nTrailingZeros - 1)) - 1;
     mpzBase = mpzTwo << nShiftCount;
     mpz_powm(mpzR.get_mpz_t(), mpzBase.get_mpz_t(), mpzE.get_mpz_t(), n.get_mpz_t());
-    //std::cout<<"Fermart result="<<mpzR.get_str()<<" Origin="<<n.get_str()<<std::endl;
     if ((mpzR == 1 || mpzR == mpzNMinusOne))
         return true;
     if ((fFastFail))
@@ -177,7 +175,6 @@ static void ProbableBiTwinChainTestFast(const mpz_class& mpzOrigin, unsigned int
   nProbableChainLength = (base-base%2) << nFractionalBits;
   base /= 2;
   int X = (1 << base) - 1;
-  //std::cout<<"base= "<<base<<" origin= "<<mpzOrigin.get_str()<<std::endl;
   // Fermat test for origin-1 first
   mpzOriginMinusOne = mpzOrigin - 1;
   if (base > 0) {
@@ -245,5 +242,6 @@ bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrima
   }
   return (nChainLength >= nBits);
 }
+
 
 
