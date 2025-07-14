@@ -696,8 +696,41 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           mineCtx.foundChains[chainlength]++;
         } 
 
-        if(chainlength >= TargetGetLength(blockheader.bits)){
-          printf("\ncandis[%d] = %s, chainlength %u\n", i, nOrigin.get_str(10).c_str(), chainlength);
+        while(multi % 2 == 0 && nOrigin % 4 == 0) {
+          mpz_class nOriginNormalize = nOrigin / 2;
+          CPrimalityTestParamsCuda testParamsNormalize = testParams;
+
+          if(ProbablePrimeChainTestFastCuda(nOriginNormalize, testParamsNormalize, mDepth))
+          {
+              if((testParams.nCandidateType == 1 && FermatProbablePrimalityTestFastCuda(nOriginNormalize - 1, chainlength, testParamsNormalize, false)) ||
+                 (testParams.nCandidateType == 2 && FermatProbablePrimalityTestFastCuda(nOriginNormalize + 1, chainlength, testParamsNormalize, false)) ||
+                 (testParams.nCandidateType == 3 && FermatProbablePrimalityTestFastCuda(nOriginNormalize - 1, chainlength, testParamsNormalize, false) && FermatProbablePrimalityTestFastCuda(nOriginNormalize + 1, chainlength, testParamsNormalize, false)))
+              {
+                unsigned chainlengthNormalize = TargetGetLength(testParamsNormalize.nChainLength);
+                if(chainlengthNormalize > chainlength) {
+                    multi /= 2;
+                    nOrigin = nOriginNormalize;
+                    chainlength = chainlengthNormalize;
+                    testParams = testParamsNormalize;
+                }
+                else
+                {
+                  break;
+                }
+              }
+              else
+              {
+                break;
+              }
+          }
+          else
+          {
+            break;
+          }
+        }
+        ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
+        if(testParams.nChainLength >= blockheader.bits){
+          printf("\ncandis[%d] = %s\n", i, nOrigin.get_str(10).c_str());
           PrimecoinBlockHeader work;
           work.version = blockheader.version;
           char blkhex[128];
