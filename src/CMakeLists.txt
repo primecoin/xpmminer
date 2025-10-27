@@ -4,6 +4,7 @@ option(DEBUG_MINING_AMD_OPENCL "Print performance counters")
 option(BUILDCPUMINER "build CPU miner" ON)
 option(BUILDOPENCLMINER "build OpenCL miner" ON)
 option(BUILDCUDAMINER "build CUDA miner" ON)
+option(BUILDHIPMINER "build HIP miner (for AMD GPUs via ROCm)" ON)
 
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
   ${CMAKE_SOURCE_DIR}/cmake
@@ -68,4 +69,7 @@ IF (BUILDOPENCLMINER)
 ENDIF()
 IF (BUILDCUDAMINER)
   add_subdirectory(Cuda)
+ENDIF()
+IF (BUILDHIPMINER)
+  add_subdirectory(Hip)
 ENDIF()
