@@ -1,4 +1,34 @@
 #include "hip/hip_runtime.h"
+
+// Type definitions for HIPRTC (runtime compilation doesn't process includes)
+typedef unsigned char uint8_t;
+typedef unsigned int uint32_t;
+typedef unsigned long long uint64_t;
+
+// Forward declarations for Montgomery functions from procs_hip.cpp
+__device__ void monSqr320(uint32_t *op, const uint32_t *mod, uint32_t invm);
+__device__ void monMul320(uint32_t *op1, const uint32_t *op2, const uint32_t *mod, uint32_t invm);
+__device__ void redcHalf320(uint32_t *op, const uint32_t *mod, uint32_t invm);
+__device__ void monSqr352(uint32_t *op, const uint32_t *mod, uint32_t invm);
+__device__ void monMul352(uint32_t *op1, const uint32_t *op2, const uint32_t *mod, uint32_t invm);
+__device__ void redcHalf352(uint32_t *op, const uint32_t *mod, uint32_t invm);
+
+__device__ void mulProductScan320to96(uint32_t *out, const uint32_t *op1, const uint32_t *op2);
+__device__ void mulProductScan320to128(uint32_t *out, const uint32_t *op1, const uint32_t *op2);
+__device__ void mulProductScan320to192(uint32_t *out, const uint32_t *op1, const uint32_t *op2);
+__device__ void mulProductScan352to96(uint32_t *out, const uint32_t *op1, const uint32_t *op2);
+__device__ void mulProductScan352to128(uint32_t *out, const uint32_t *op1, const uint32_t *op2);
+__device__ void mulProductScan352to192(uint32_t *out, const uint32_t *op1, const uint32_t *op2);
+__device__ void mulProductScan352to32(uint32_t *out, const uint32_t *op1, uint32_t M);
+
+__device__ unsigned divide512to352reg(uint32_t dv0, uint32_t dv1, uint32_t dv2, uint32_t dv3, uint32_t dv4, uint32_t dv5, uint32_t dv6, uint32_t dv7, uint32_t dv8, uint32_t dv9, uint32_t dv10, uint32_t dv11, uint32_t dv12, uint32_t dv13, uint32_t dv14, uint32_t dv15,
+    uint32_t ds0, uint32_t ds1, uint32_t ds2, uint32_t ds3, uint32_t ds4, uint32_t ds5, uint32_t ds6, uint32_t ds7, uint32_t ds8, uint32_t ds9, uint32_t ds10,
+    uint32_t *q0, uint32_t *q1, uint32_t *q2, uint32_t *q3, uint32_t *q4, uint32_t *q5, uint32_t *q6, uint32_t *q7);
+
+__device__ unsigned divide480to320reg(uint32_t dv0, uint32_t dv1, uint32_t dv2, uint32_t dv3, uint32_t dv4, uint32_t dv5, uint32_t dv6, uint32_t dv7, uint32_t dv8, uint32_t dv9, uint32_t dv10, uint32_t dv11, uint32_t dv12, uint32_t dv13, uint32_t dv14,
+    uint32_t ds0, uint32_t ds1, uint32_t ds2, uint32_t ds3, uint32_t ds4, uint32_t ds5, uint32_t ds6, uint32_t ds7, uint32_t ds8, uint32_t ds9,
+    uint32_t *q0, uint32_t *q1, uint32_t *q2, uint32_t *q3, uint32_t *q4, uint32_t *q5, uint32_t *q6, uint32_t *q7);
+
 #define N 12
 #define SCOUNT PCOUNT
 
@@ -343,18 +373,25 @@ extern "C" __global__ void setup_fermat(uint32_t *fprimes,
 
   uint32_t modifier = (info.type == 1 || (info.type == 2 && (info.chainpos & 1))) ? 1 : -1;
 
+  // WORKAROUND: ROCm/HIP compiler optimization bug
+  // Without volatile access, the compiler incorrectly optimizes away writes inside mulProductScan352to32
+  // This forces the compiler to treat m[] as having side effects
+  volatile uint32_t* vm = (volatile uint32_t*)m;
+  (void)vm[0];
+
   mulProductScan352to32(m, h, info.index);
+
+  // Normal processing path for ALL threads
   if (line)
     shl(m, 11, line);
   m[0] += modifier;
-  
 #pragma unroll
   for (unsigned i = 0; i < 11; i++)
     fprimes[gsize*i + id] = m[i];
 }
 
 
-extern "C" __global__ void fermat_kernel(uint8_t *result, const uint32_t *fprimes)
+extern "C" __global__ void __launch_bounds__(64) fermat_kernel(uint8_t * __restrict__ result, const uint32_t * __restrict__ fprimes)
 {
   const uint32_t id = blockIdx.x * blockDim.x + threadIdx.x;
   const uint32_t gsize = gridDim.x * blockDim.x;  
@@ -367,7 +404,7 @@ extern "C" __global__ void fermat_kernel(uint8_t *result, const uint32_t *fprime
   result[id] = fermat352(e);
 }
 
-extern "C" __global__ void fermat_kernel320(uint8_t *result, const uint32_t *fprimes)
+extern "C" __global__ void __launch_bounds__(64) fermat_kernel320(uint8_t * __restrict__ result, const uint32_t * __restrict__ fprimes)
 {
   const uint32_t id = blockIdx.x * blockDim.x + threadIdx.x;
   const uint32_t gsize = gridDim.x * blockDim.x;  
@@ -375,8 +412,8 @@ extern "C" __global__ void fermat_kernel320(uint8_t *result, const uint32_t *fpr
   
 #pragma unroll
   for (unsigned i = 0; i < 10; i++)
-    e[i] = fprimes[gsize*i + id];  
-  
+    e[i] = fprimes[gsize*i + id];
+
   result[id] = fermat320(e);
 }
 

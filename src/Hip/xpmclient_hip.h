@@ -3,6 +3,7 @@
  *
  *  Created on: 01.05.2014
  *      Author: mad
+ *      Co-author: Primecoin team
  *  HIP Port: 2025-10-24
  */
 
@@ -13,7 +14,7 @@
 #include <gmp.h>
 #include <gmpxx.h>
 #include "getblocktemplate.h"
-#include "hiputil.h"
+#include "hiputil_auto.h"
 #include "uint256.h"
 #include "sha256.h"
 #include "system.h"
@@ -69,6 +70,7 @@ struct HIPDeviceInfo {
   hipCtx_t context;
   int majorComputeCapability;
   int minorComputeCapability;
+  char gcnArchName[256];
 };
 
 
@@ -216,6 +218,7 @@ private:
   unsigned mBlockSize;
   uint32_t mDepth;
   unsigned mLSize;
+  unsigned mComputeUnits;
 
   hipCtx_t _context;
   hipStream_t mSieveStream;

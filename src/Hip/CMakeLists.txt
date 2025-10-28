@@ -13,12 +13,14 @@ endif()
 set(HIP_PLATFORM "amd" CACHE STRING "HIP platform (amd or nvidia)")
 set(HIP_RUNTIME "rocclr" CACHE STRING "HIP runtime")
 
-# Find HIP
+# Find HIP (QUIET mode - don't fail if not found)
 list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH})
-find_package(HIP REQUIRED)
+find_package(HIP QUIET)
 
 if (NOT HIP_FOUND)
-    message(FATAL_ERROR "HIP not found. Please install ROCm.")
+    message(STATUS "HIP not found. Skipping HIP miner build.")
+    message(STATUS "  To build HIP miner, install ROCm from https://rocm.docs.amd.com/")
+    return()
 endif()
 
 message(STATUS "HIP found: ${HIP_VERSION}")
@@ -28,11 +30,11 @@ message(STATUS "ROCm path: ${ROCM_PATH}")
 # Find HIPRTC library
 find_library(HIP_HIPRTC_LIBRARY hiprtc
     HINTS ${ROCM_PATH}/lib
-    REQUIRED
 )
 
 if (NOT HIP_HIPRTC_LIBRARY)
-    message(FATAL_ERROR "HIPRTC library not found")
+    message(STATUS "HIPRTC library not found. Skipping HIP miner build.")
+    return()
 endif()
 
 message(STATUS "HIPRTC library: ${HIP_HIPRTC_LIBRARY}")
@@ -46,6 +48,9 @@ if (CMAKE_COMPILER_IS_GNUCC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated -Wno-ignored-attributes")
   endif()
 endif()
+
+# Note: AMD GPU optimization flags like -munsafe-fp-atomics are applied
+# to HIPRTC kernel compilation in xpmclient_hip.cpp, not to host C++ code
 
 if (WIN32)
   message(FATAL_ERROR "HIP miner does not support Windows. Use Linux.")
@@ -107,18 +112,26 @@ target_link_libraries(xpmhip
   dl
 )
 
+# Post-build: Auto-copy kernel files to build directory
+# This makes the binary work immediately after 'make' without manual file copying
+# Uses file(GLOB) to automatically find all *_hip.cpp kernel files (no hardcoded paths)
+file(GLOB HIP_KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*_hip.cpp")
+add_custom_command(TARGET xpmhip POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/xpm/cuda
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${HIP_KERNEL_SOURCES}
+        ${CMAKE_CURRENT_BINARY_DIR}/xpm/cuda/
+    COMMENT "Copying HIP kernel source files to build directory for HIPRTC runtime compilation"
+)
+
 # Install target
 install(TARGETS xpmhip DESTINATION bin)
 
-# Copy kernel source files to xpm/cuda directory for runtime compilation
+# Copy kernel source files for installation
 # Note: HIPRTC will read these files at runtime
-install(FILES
-    fermat_hip.cpp
-    sha256_hip.cpp
-    sieve_hip.cpp
-    procs_hip.cpp
-    benchmarks_hip.cpp
-    DESTINATION share/xpmminer/hip
+# Uses the same glob pattern as the build step (no hardcoded paths)
+install(FILES ${HIP_KERNEL_SOURCES}
+    DESTINATION share/xpmminer/xpm/cuda
 )
 
 message(STATUS "HIP miner configuration complete")
