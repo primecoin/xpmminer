@@ -1,4 +1,4 @@
-#include "xpmclient_hip.h_temp"
+#include "xpmclient_hip.h"
 
 void hipRunBenchmarks(hipCtx_t context,
                       hipDevice_t device,

@@ -18,8 +18,10 @@
 
 enum CUDAKernels {
   CUDAKernelGenConfig = 0,
+  CUDAKernelMultiplyBenchmark256,
+  CUDAKernelMultiplyBenchmark384,
   CUDAKernelSquareBenchmark320,
-  CUDAKernelSquareBenchmark352,  
+  CUDAKernelSquareBenchmark352,
   CUDAKernelMultiplyBenchmark320,
   CUDAKernelMultiplyBenchmark352,
   CUDAKernelFermatTestBenchmark320,
@@ -29,10 +31,12 @@ enum CUDAKernels {
   CUDAKernelSieve,
   CUDAKernelSieveSearch,
   CUDAKernelsNum
-};  
- 
+};
+
 static const char *gCUDAKernelNames[] = {
   "getconfig",
+  "multiplyBenchmark256",
+  "multiplyBenchmark384",
   "squareBenchmark320",
   "squareBenchmark352",
   "multiplyBenchmark320",
@@ -45,6 +49,8 @@ static const char *gCUDAKernelNames[] = {
   "s_sieve"
 };
 
+// AMD RDNA optimization: Use 256 threads per block (8 wavefronts on wave32 GPUs)
+// This matches the LSIZE used in sieve kernels for consistency
 const unsigned GroupSize = 256;
 const unsigned MulOpsNum = 512; 
 
@@ -313,8 +319,123 @@ void hipMultiplyBenchmark(hipFunction_t *kernels,
   double cpuTime = std::chrono::duration_cast<std::chrono::microseconds>(cpuEnd-cpuBegin).count() / 1000.0;
   double speedup = cpuTime / gpuTime;
 
-  LOG_F(INFO, "%s %u bits CPU time: %.3lf, GPU time: %.3lf (%.3lf times faster)",
-        (isSquaring ? "Square" : "Multiply"), mulOperandSize*32, cpuTime, gpuTime, speedup);
+  // Calculate operations per second for cross-architecture comparison
+  double totalOps = (double)elementsNum * MulOpsNum;
+  double gpuMopsPerSec = (totalOps / 1000000.0) / (gpuTime / 1000.0);
+  double cpuMopsPerSec = (totalOps / 1000000.0) / (cpuTime / 1000.0);
+
+  LOG_F(INFO, "%s %u bits: GPU %.0lf Mops/s, CPU %.0lf Mops/s (%.2fx faster)",
+        (isSquaring ? "Square" : "Multiply"), mulOperandSize*32, gpuMopsPerSec, cpuMopsPerSec, speedup);
+}
+
+// OpenCL-compatible benchmark for 256 and 384-bit multiplication
+// Uses lower half copy (OpenCL approach) instead of upper half (CUDA approach)
+void hipMultiplyBenchmarkOCL(hipFunction_t *kernels,
+                              unsigned groupsNum,
+                              unsigned mulOperandSize,
+                              uint32_t elementsNum)
+{
+  unsigned limbsNum = elementsNum*mulOperandSize;
+  hipBuffer<uint32_t> m1;
+  hipBuffer<uint32_t> m2;
+  hipBuffer<uint32_t> mR;
+  hipBuffer<uint32_t> cpuR;
+
+  HIP_SAFE_CALL(m1.init(limbsNum, false));
+  HIP_SAFE_CALL(m2.init(limbsNum, false));
+  HIP_SAFE_CALL(mR.init(limbsNum*2, false));
+  HIP_SAFE_CALL(cpuR.init(limbsNum*2, false));
+
+  memset(m1._hostData, 0, limbsNum*sizeof(uint32_t));
+  memset(m2._hostData, 0, limbsNum*sizeof(uint32_t));
+  memset(mR._hostData, 0, 2*limbsNum*sizeof(uint32_t));
+  memset(cpuR._hostData, 0, 2*limbsNum*sizeof(uint32_t));
+  for (unsigned i = 0; i < elementsNum; i++) {
+    for (unsigned j = 0; j < mulOperandSize; j++) {
+      m1[i*mulOperandSize + j] = rand32();
+      m2[i*mulOperandSize + j] = rand32();
+    }
+  }
+
+  HIP_SAFE_CALL(m1.copyToDevice());
+  HIP_SAFE_CALL(m2.copyToDevice());
+
+  hipFunction_t kernel;
+  if (mulOperandSize == 256/32) {
+    kernel = kernels[CUDAKernelMultiplyBenchmark256];
+  } else if (mulOperandSize == 384/32) {
+    kernel = kernels[CUDAKernelMultiplyBenchmark384];
+  } else {
+    LOG_F(ERROR, "Can't multiply %u-size operands on HIP device", mulOperandSize*32);
+    return;
+  }
+
+  void *multiplicationArguments[] = { &m1._deviceData, &m2._deviceData, &mR._deviceData, &elementsNum };
+
+  std::unique_ptr<mpz_class[]> cpuM1(new mpz_class[elementsNum]);
+  std::unique_ptr<mpz_class[]> cpuM2(new mpz_class[elementsNum]);
+  std::unique_ptr<mpz_class[]> cpuResult(new mpz_class[elementsNum]);
+
+  for (unsigned i = 0; i < elementsNum; i++) {
+    mpz_import(cpuM1[i].get_mpz_t(), mulOperandSize, -1, 4, 0, 0, &m1[i*mulOperandSize]);
+    mpz_import(cpuM2[i].get_mpz_t(), mulOperandSize, -1, 4, 0, 0, &m2[i*mulOperandSize]);
+    mpz_import(cpuResult[i].get_mpz_t(), mulOperandSize*2, -1, 4, 0, 0, &mR[i*mulOperandSize*2]);
+  }
+
+  auto gpuBegin = std::chrono::steady_clock::now();
+
+  HIP_SAFE_CALL(hipModuleLaunchKernel(kernel,
+                                elementsNum/GroupSize, 1, 1,
+                                GroupSize, 1, 1,
+                                0, NULL, multiplicationArguments, 0));
+  HIP_SAFE_CALL(hipDeviceSynchronize());
+
+  auto gpuEnd = std::chrono::steady_clock::now();
+
+  auto cpuBegin = std::chrono::steady_clock::now();
+
+  // OpenCL-compatible CPU reference: copy LOWER half (not upper half like CUDA)
+  for (unsigned i = 0; i < elementsNum; i++) {
+    unsigned gmpLimbsNum = cpuM1[i].get_mpz_t()->_mp_size;
+    mp_limb_t *Operand1 = cpuM1[i].get_mpz_t()->_mp_d;
+    mp_limb_t *Operand2 = cpuM2[i].get_mpz_t()->_mp_d;
+    uint32_t *target = &cpuR[i*mulOperandSize*2];
+    for (unsigned j = 0; j < 512; j++) {
+      mpn_mul_n((mp_limb_t*)target, Operand1, Operand2, gmpLimbsNum);
+      // Copy lower half (OpenCL approach) - this matches what the GPU kernel does
+      memcpy(Operand1, target, gmpLimbsNum*sizeof(mp_limb_t));
+    }
+  }
+
+  auto cpuEnd = std::chrono::steady_clock::now();
+
+  HIP_SAFE_CALL(mR.copyToHost());
+
+  for (unsigned i = 0; i < elementsNum; i++) {
+    if (memcmp(&mR[i*mulOperandSize*2], &cpuR[i*mulOperandSize*2], 4*mulOperandSize*2) != 0) {
+      LOG_F(ERROR, "element index: %u", i);
+      LOG_F(ERROR, "gmp: ");
+      for (unsigned j = 0; j < mulOperandSize*2; j++)
+        LOG_F(ERROR, "%08X ", cpuR[i*mulOperandSize*2 + j]);
+      LOG_F(ERROR, "gpu: ");
+      for (unsigned j = 0; j < mulOperandSize*2; j++)
+        LOG_F(ERROR, "%08X ", mR[i*mulOperandSize*2 + j]);
+      LOG_F(ERROR, "results differ!");
+      break;
+    }
+  }
+
+  double gpuTime = std::chrono::duration_cast<std::chrono::microseconds>(gpuEnd-gpuBegin).count() / 1000.0;
+  double cpuTime = std::chrono::duration_cast<std::chrono::microseconds>(cpuEnd-cpuBegin).count() / 1000.0;
+  double speedup = cpuTime / gpuTime;
+
+  // Calculate operations per second for cross-architecture comparison
+  double totalOps = (double)elementsNum * 512;
+  double gpuMopsPerSec = (totalOps / 1000000.0) / (gpuTime / 1000.0);
+  double cpuMopsPerSec = (totalOps / 1000000.0) / (cpuTime / 1000.0);
+
+  LOG_F(INFO, "Multiply %u bits: GPU %.0lf Mops/s, CPU %.0lf Mops/s (%.2fx faster)",
+        mulOperandSize*32, gpuMopsPerSec, cpuMopsPerSec, speedup);
 }
 
 void hipFermatTestBenchmark(hipFunction_t *kernels,
@@ -413,8 +534,12 @@ void hipFermatTestBenchmark(hipFunction_t *kernels,
   double cpuTime = std::chrono::duration_cast<std::chrono::microseconds>(cpuEnd-gpuEnd).count() / 1000.0;
   double speedup = cpuTime / gpuTime;
 
-  LOG_F(INFO, "Fermat tests %u bits CPU time: %.3lf, GPU time: %.3lf (%.3lf times faster)",
-        operandSize*32, cpuTime, gpuTime, speedup);
+  // Calculate operations per second for cross-architecture comparison
+  double gpuMopsPerSec = ((double)elementsNum / 1000000.0) / (gpuTime / 1000.0);
+  double cpuMopsPerSec = ((double)elementsNum / 1000000.0) / (cpuTime / 1000.0);
+
+  LOG_F(INFO, "Fermat tests %u bits: GPU %.2lf Mops/s, CPU %.2lf Mops/s (%.2fx faster)",
+        operandSize*32, gpuMopsPerSec, cpuMopsPerSec, speedup);
 }
 
 void hipHashmodBenchmark(hipFunction_t *kernels,
@@ -953,6 +1078,11 @@ void hipRunBenchmarks(hipCtx_t context,
     }
   }
   
+  // OpenCL-comparable benchmarks (256/384-bit, lower-half copy)
+  hipMultiplyBenchmarkOCL(kernels.get(), computeUnits*4, 256/32, 262144);
+  hipMultiplyBenchmarkOCL(kernels.get(), computeUnits*4, 384/32, 262144);
+
+  // CUDA-comparable benchmarks (320/352-bit, upper-half copy)
   hipMultiplyBenchmark(kernels.get(), computeUnits*4, 320/32, 262144, true);
   hipMultiplyBenchmark(kernels.get(), computeUnits*4, 320/32, 262144, false);
   hipMultiplyBenchmark(kernels.get(), computeUnits*4, 352/32, 262144, true);

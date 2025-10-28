@@ -574,8 +574,14 @@ void multiplyBenchmark(OpenCLDeviceContext &device,
   
   double cpuTime = usDiff(gpuEnd, cpuEnd) / 1000000.0;
   double gpuTime = usDiff(gpuBegin, gpuEnd) / 1000000.0;
-  printf("Multiply %u bits CPU time: %.3lf, GPU time: %.3lf (%.3lf times faster)\n",
-         mulOperandSize*32, cpuTime, gpuTime, cpuTime/gpuTime);
+
+  // Calculate operations per second for cross-architecture comparison
+  double totalOps = (double)elementsNum * 512; // 512 operations per element
+  double gpuMopsPerSec = (totalOps / 1000000.0) / gpuTime;
+  double cpuMopsPerSec = (totalOps / 1000000.0) / cpuTime;
+
+  printf("Multiply %u bits: GPU %.0lf Mops/s, CPU %.0lf Mops/s (%.2fx faster)\n",
+         mulOperandSize*32, gpuMopsPerSec, cpuMopsPerSec, cpuTime/gpuTime);
           
 }
 
@@ -875,7 +881,12 @@ void fermatTestBenchmark(OpenCLDeviceContext &device,
   }
   
   double cpuTime = usDiff(gpuEnd, cpuEnd) / 1000000.0;
-  double gpuTime = usDiff(gpuBegin, gpuEnd) / 1000000.0 ;
-  printf("Fermat test %u bits CPU time: %.3lf, GPU time: %.3lf (%.3lf times faster)\n",
-         operandSize*32, cpuTime, gpuTime, cpuTime/gpuTime);  
+  double gpuTime = usDiff(gpuBegin, gpuEnd) / 1000000.0;
+
+  // Calculate operations per second for cross-architecture comparison
+  double gpuMopsPerSec = ((double)elementsNum / 1000000.0) / gpuTime;
+  double cpuMopsPerSec = ((double)elementsNum / 1000000.0) / cpuTime;
+
+  printf("Fermat test %u bits: GPU %.2lf Mops/s, CPU %.2lf Mops/s (%.2fx faster)\n",
+         operandSize*32, gpuMopsPerSec, cpuMopsPerSec, cpuTime/gpuTime);  
 }
