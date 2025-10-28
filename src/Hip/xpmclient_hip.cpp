@@ -137,13 +137,8 @@ bool PrimeMiner::Initialize(hipCtx_t context, hipDevice_t device, hipModule_t mo
   
   int computeUnits;
   HIP_SAFE_CALL(hipDeviceGetAttribute(&computeUnits, hipDeviceAttributeMultiprocessorCount, device));
-  mComputeUnits = computeUnits;
   mBlockSize = computeUnits * 4 * 64;
   LOG_F(INFO, "GPU %d: has %d CUs", mID, computeUnits);
-
-  // Calculate and log optimal Fermat kernel thread count
-  unsigned fermatThreads = (computeUnits <= 4) ? 64 : (computeUnits <= 16) ? 128 : 256;
-  LOG_F(INFO, "GPU %d: Fermat kernel threads = %u (based on %d CUs)", mID, fermatThreads, computeUnits);
   return true;
 }
 
@@ -223,17 +218,7 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
           &fermat.input._deviceData
         };
 
-        // Dynamic thread count based on GPU capabilities
-        // Fermat kernels are complex and use significant registers/LDS
-        // Scale thread count with CU count to avoid resource exhaustion on low-end GPUs
-        unsigned threadsPerBlock;
-        if (mComputeUnits <= 4) {
-          threadsPerBlock = 64;   // Low-end GPUs (2-4 CUs): conservative
-        } else if (mComputeUnits <= 16) {
-          threadsPerBlock = 128;  // Mid-range GPUs (5-16 CUs): balanced
-        } else {
-          threadsPerBlock = 256;  // High-end GPUs (17+ CUs): optimal
-        }
+        const unsigned threadsPerBlock = 256;
         unsigned blocksPerGrid = (fermat.bsize + threadsPerBlock - 1) / threadsPerBlock;
 
         HIP_SAFE_CALL(hipModuleLaunchKernel(fermatKernel,

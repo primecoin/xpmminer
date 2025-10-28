@@ -391,7 +391,7 @@ extern "C" __global__ void setup_fermat(uint32_t *fprimes,
 }
 
 
-extern "C" __global__ void __launch_bounds__(64) fermat_kernel(uint8_t * __restrict__ result, const uint32_t * __restrict__ fprimes)
+extern "C" __global__ void fermat_kernel(uint8_t * __restrict__ result, const uint32_t * __restrict__ fprimes)
 {
   const uint32_t id = blockIdx.x * blockDim.x + threadIdx.x;
   const uint32_t gsize = gridDim.x * blockDim.x;  
@@ -404,7 +404,7 @@ extern "C" __global__ void __launch_bounds__(64) fermat_kernel(uint8_t * __restr
   result[id] = fermat352(e);
 }
 
-extern "C" __global__ void __launch_bounds__(64) fermat_kernel320(uint8_t * __restrict__ result, const uint32_t * __restrict__ fprimes)
+extern "C" __global__ void fermat_kernel320(uint8_t * __restrict__ result, const uint32_t * __restrict__ fprimes)
 {
   const uint32_t id = blockIdx.x * blockDim.x + threadIdx.x;
   const uint32_t gsize = gridDim.x * blockDim.x;  

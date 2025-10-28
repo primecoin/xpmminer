@@ -218,7 +218,6 @@ private:
   unsigned mBlockSize;
   uint32_t mDepth;
   unsigned mLSize;
-  unsigned mComputeUnits;
 
   hipCtx_t _context;
   hipStream_t mSieveStream;
