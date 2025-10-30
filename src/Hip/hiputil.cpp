@@ -78,7 +78,7 @@ bool hipCompileKernel(const char *kernelName,
       bin.close();
     }
 
-    delete[] code;
+    delete[] ptx;
   }
 
   std::ifstream bfile(kernelName, std::ifstream::binary);
