@@ -1,4 +1,3 @@
-#include "hip/hip_runtime.h"
 // Disable all warnings from gcc/clang:
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpragmas"

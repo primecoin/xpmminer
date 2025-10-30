@@ -1,7 +1,7 @@
-#include "xpmclient.h"
+#include "xpmclient_hip.h"
 
-void cudaRunBenchmarks(hipCtx_t context,
-                       hipDevice_t device,
-                       hipModule_t module,
-                       unsigned depth,
-                       unsigned defaultGroupSize);
+void hipRunBenchmarks(hipCtx_t context,
+                      hipDevice_t device,
+                      hipModule_t module,
+                      unsigned depth,
+                      unsigned defaultGroupSize);

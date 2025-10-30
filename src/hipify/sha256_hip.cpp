@@ -111,15 +111,16 @@ __constant__ unsigned gPrimes[] = {
 __device__ uint32_t sum24(const uint32_t *data, unsigned size, uint32_t *moddata)
 {
   unsigned size24 = size*32; size24 += size24 % 24 ? 24 - size24%24 : 0;
-  
+
   uint32_t acc = data[0] & 0x00FFFFFF;
 #pragma unroll
   for (unsigned i = 0, bitPos = 24; bitPos < size24; bitPos += 24, i++) {
     uint64_t v64 = *(uint64_t*)(data+bitPos/32) >> (bitPos%32);
-    // Use regular multiply - faster on modern GPUs (CC 2.0+)
+    // AMD optimization: Use standard 32-bit multiply instead of __umul24
+    // Modern GPUs (RDNA/CDNA) have native 32-bit ALUs; 24-bit ops require emulation
     acc += ((v64 & 0xFFFFFF) * moddata[i]);
   }
-  
+
   return acc;
 }
 
@@ -402,7 +403,7 @@ __device__ void sha256UsePrecalc(const uint32_t *msg,
 
 #define select(a, b, c) ((c) ? (b) : (a))
 
-__global__ void bhashmodUsePrecalc(uint32_t nonceOffset,
+extern "C" __global__ void bhashmodUsePrecalc(uint32_t nonceOffset,
                                    uint32_t *found,
                                    uint32_t *fcount,
                                    uint32_t *resultPrimorial,
@@ -486,7 +487,7 @@ __global__ void bhashmodUsePrecalc(uint32_t nonceOffset,
     
     uint32_t prod13l = 1;
     for (unsigned i = 0; i < 8; i++)
-      prod13l = mul24(prod13l, select(gPrimes[i], 1u, primorialBitField & (1u << i)));
+      prod13l = (prod13l * select(gPrimes[i], 1u, primorialBitField & (1u << i)));
     prod13l *= select(gPrimes[8], 1u, primorialBitField & (1u << 8));
     
     uint64_t prod13 = prod13l;

@@ -13,7 +13,7 @@ __constant__ uint32_t nps_all[] = { 2, 2, 3, 4, 5, 5, 5, 6, 6 }; // 256 threads
 #error "Unsupported LSIZELOG2 constant"
 #endif
 
-__global__ void sieve(uint32_t *gsieve_all,
+extern "C" __global__ void sieve(uint32_t *gsieve_all,
                       uint32_t* offset_all,
                       uint2 *primes)
 {
@@ -49,7 +49,6 @@ __global__ void sieve(uint32_t *gsieve_all,
     uint32_t pos = loffset & 0x7FFFFFFF;
 
     poff += 1u << nps;
-    // Use regular multiply - faster on modern GPUs (CC 2.0+)
     pos += ((uint32_t)(fentry * fiprime) * prime);
       pos -= entry;
     pos += ((int)pos < 0 ? prime : 0);
@@ -139,8 +138,7 @@ __global__ void sieve(uint32_t *gsieve_all,
     const uint32_t prime = plifo[lpos];
     const float fiprime = __int_as_float(fiplifo[lpos]);
     uint32_t pos = olifo[lpos];
-
-    // Use regular multiply - faster on modern GPUs (CC 2.0+)
+    
     pos += ((uint32_t)(fentry * fiprime) * prime);
       pos -= entry;
     pos += ((int)pos < 0 ? prime : 0);
@@ -210,7 +208,6 @@ __global__ void sieve(uint32_t *gsieve_all,
     const float fiprime = __int_as_float(fiplifo[lpos]);
     uint32_t pos = olifo[lpos];
 
-    // Use regular multiply - faster on modern GPUs (CC 2.0+)
     pos += ((uint32_t)(fentry * fiprime) * prime);
       pos -= entry;
     pos += ((int)pos < 0 ? prime : 0);
@@ -239,7 +236,7 @@ __global__ void sieve(uint32_t *gsieve_all,
     gsieve[i] = sieve[i];
 }
 
-__global__ void s_sieve(const uint32_t *gsieve1,
+extern "C" __global__ void s_sieve(const uint32_t *gsieve1,
                         const uint32_t* gsieve2,
                         fermat_t *found320,
                         fermat_t *found352,

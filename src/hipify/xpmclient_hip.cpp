@@ -4,14 +4,16 @@
  *
  *  Created on: 01.05.2014
  *      Author: mad
+ *      Co-author: Primecoin team
  */
 
 
 
-#include "xpmclient.h"
+#include "xpmclient_hip.h"
 #include "primecoin.h"
-#include "benchmarks.h"
+#include "benchmarks_hip.h"
 #include "system.h"
+#include "gprimes.h"
 #include <getopt.h>
 #include <fstream>
 #include <set>
@@ -99,34 +101,34 @@ bool PrimeMiner::Initialize(hipCtx_t context, hipDevice_t device, hipModule_t mo
 {
   _context = context;
   hipCtxSetCurrent(context);
+
+  // Lookup kernels by unmangled name (using extern "C")
+  HIP_SAFE_CALL(hipModuleGetFunction(&mHashMod, module, "bhashmodUsePrecalc"));
+  HIP_SAFE_CALL(hipModuleGetFunction(&mSieveSetup, module, "setup_sieve"));
+  HIP_SAFE_CALL(hipModuleGetFunction(&mSieve, module, "sieve"));
+  HIP_SAFE_CALL(hipModuleGetFunction(&mSieveSearch, module, "s_sieve"));
+  HIP_SAFE_CALL(hipModuleGetFunction(&mFermatSetup, module, "setup_fermat"));
+  HIP_SAFE_CALL(hipModuleGetFunction(&mFermatKernel352, module, "fermat_kernel"));
+  HIP_SAFE_CALL(hipModuleGetFunction(&mFermatKernel320, module, "fermat_kernel320"));
+  HIP_SAFE_CALL(hipModuleGetFunction(&mFermatCheck, module, "check_fermat"));  
   
-  // Lookup kernels by mangled name
-  CUDA_SAFE_CALL(hipModuleGetFunction(&mHashMod, module, "_Z18bhashmodUsePrecalcjPjS_S_S_jjjjjjjjjjjj"));
-  CUDA_SAFE_CALL(hipModuleGetFunction(&mSieveSetup, module, "_Z11setup_sievePjS_PKjS_jS_"));
-  CUDA_SAFE_CALL(hipModuleGetFunction(&mSieve, module, "_Z5sievePjS_P5uint2"));
-  CUDA_SAFE_CALL(hipModuleGetFunction(&mSieveSearch, module, "_Z7s_sievePKjS0_P8fermat_tS2_Pjjjj"));
-  CUDA_SAFE_CALL(hipModuleGetFunction(&mFermatSetup, module, "_Z12setup_fermatPjPK8fermat_tS_"));
-  CUDA_SAFE_CALL(hipModuleGetFunction(&mFermatKernel352, module, "_Z13fermat_kernelPhPKj"));
-  CUDA_SAFE_CALL(hipModuleGetFunction(&mFermatKernel320, module, "_Z16fermat_kernel320PhPKj"));
-  CUDA_SAFE_CALL(hipModuleGetFunction(&mFermatCheck, module, "_Z12check_fermatP8fermat_tPjS0_S1_PKhPKS_j"));  
-  
-  CUDA_SAFE_CALL(hipStreamCreateWithFlags(&mSieveStream, hipStreamNonBlocking));
-  CUDA_SAFE_CALL(hipStreamCreateWithFlags(&mHMFermatStream, hipStreamNonBlocking));
+  HIP_SAFE_CALL(hipStreamCreateWithFlags(&mSieveStream, hipStreamNonBlocking));
+  HIP_SAFE_CALL(hipStreamCreateWithFlags(&mHMFermatStream, hipStreamNonBlocking));
   
   // Get miner config
   {
     hipFunction_t getConfigKernel;
-    CUDA_SAFE_CALL(hipModuleGetFunction(&getConfigKernel, module, "_Z9getconfigP8config_t"));  
+    HIP_SAFE_CALL(hipModuleGetFunction(&getConfigKernel, module, "getconfig"));  
     
-    cudaBuffer<config_t> config;
-    CUDA_SAFE_CALL(config.init(1, false));
+    hipBuffer<config_t> config;
+    HIP_SAFE_CALL(config.init(1, false));
     void *args[] = { &config._deviceData };
-    CUDA_SAFE_CALL(hipModuleLaunchKernel(getConfigKernel,
+    HIP_SAFE_CALL(hipModuleLaunchKernel(getConfigKernel,
                                   1, 1, 1,
                                   1, 1, 1,
                                   0, NULL, args, 0));
-    CUDA_SAFE_CALL(hipCtxSynchronize());
-    CUDA_SAFE_CALL(config.copyToHost());
+    HIP_SAFE_CALL(hipDeviceSynchronize());  // Use runtime API instead of deprecated hipCtxSynchronize
+    HIP_SAFE_CALL(config.copyToHost());
     mConfig = *config._hostData;
   }
 
@@ -134,7 +136,7 @@ bool PrimeMiner::Initialize(hipCtx_t context, hipDevice_t device, hipModule_t mo
          mConfig.N, mConfig.SIZE, mConfig.STRIPES, mConfig.WIDTH, mConfig.PCOUNT, mConfig.TARGET);
   
   int computeUnits;
-  CUDA_SAFE_CALL(hipDeviceGetAttribute(&computeUnits, hipDeviceAttributeMultiprocessorCount, device));
+  HIP_SAFE_CALL(hipDeviceGetAttribute(&computeUnits, hipDeviceAttributeMultiprocessorCount, device));
   mBlockSize = computeUnits * 4 * 64;
   LOG_F(INFO, "GPU %d: has %d CUs", mID, computeUnits);
   return true;
@@ -144,18 +146,18 @@ void PrimeMiner::FermatInit(pipeline_t &fermat, unsigned mfs)
 {
   fermat.current = 0;
   fermat.bsize = 0;
-  CUDA_SAFE_CALL(fermat.input.init(mfs*mConfig.N, true));
-  CUDA_SAFE_CALL(fermat.output.init(mfs, true));
+  HIP_SAFE_CALL(fermat.input.init(mfs*mConfig.N, true));
+  HIP_SAFE_CALL(fermat.output.init(mfs, true));
 
   for(int i = 0; i < 2; ++i){
-    CUDA_SAFE_CALL(fermat.buffer[i].info.init(mfs, true));
-    CUDA_SAFE_CALL(fermat.buffer[i].count.init(1, false)); // CL_MEM_ALLOC_HOST_PTR
+    HIP_SAFE_CALL(fermat.buffer[i].info.init(mfs, true));
+    HIP_SAFE_CALL(fermat.buffer[i].count.init(1, false)); // CL_MEM_ALLOC_HOST_PTR
   }
 }
 
 void PrimeMiner::FermatDispatch(pipeline_t &fermat,
-                                cudaBuffer<fermat_t> sieveBuffers[SW][FERMAT_PIPELINES][2],
-                                cudaBuffer<uint32_t> candidatesCountBuffers[SW][2],
+                                hipBuffer<fermat_t> sieveBuffers[SW][FERMAT_PIPELINES][2],
+                                hipBuffer<uint32_t> candidatesCountBuffers[SW][2],
                                 unsigned pipelineIdx,
                                 int ridx,
                                 int widx,
@@ -189,10 +191,11 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
     }
     
     fermat.buffer[widx].count[0] = 0;
-    CUDA_SAFE_CALL(fermat.buffer[widx].count.copyToDevice(mHMFermatStream));
-    
+    HIP_SAFE_CALL(fermat.buffer[widx].count.copyToDevice(mHMFermatStream));
+
     fermat.bsize = 0;
-    if(count > mBlockSize){                 
+
+    if(count > mBlockSize){
       fermat.bsize = count - (count % mBlockSize);
       {
         // Fermat test setup
@@ -202,25 +205,31 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
           &hashBuf._deviceData
         };
         
-        CUDA_SAFE_CALL(hipModuleLaunchKernel(mFermatSetup,
-                                      fermat.bsize/256, 1, 1,                                
+        HIP_SAFE_CALL(hipModuleLaunchKernel(mFermatSetup,
+                                      fermat.bsize/256, 1, 1,
                                       256, 1, 1,
                                       0, mHMFermatStream, arguments, 0));
       }
-      
+
       {
         // Fermat test
         void *arguments[] = {
           &fermat.output._deviceData,
           &fermat.input._deviceData
         };
-        
-        CUDA_SAFE_CALL(hipModuleLaunchKernel(fermatKernel,
-                                      fermat.bsize/64, 1, 1,                                
-                                      64, 1, 1,
-                                      0, mHMFermatStream, arguments, 0));        
+
+        const unsigned threadsPerBlock = 256;
+        unsigned blocksPerGrid = (fermat.bsize + threadsPerBlock - 1) / threadsPerBlock;
+
+        HIP_SAFE_CALL(hipModuleLaunchKernel(fermatKernel,
+                                      blocksPerGrid, 1, 1,
+                                      threadsPerBlock, 1, 1,
+                                      0, mHMFermatStream, arguments, 0));
+
+        // Synchronization required for HIP async operations
+        HIP_SAFE_CALL(hipStreamSynchronize(mHMFermatStream));
       }
-      
+
       {
         // Fermat check
         void *arguments[] = {
@@ -231,15 +240,19 @@ void PrimeMiner::FermatDispatch(pipeline_t &fermat,
           &fermat.output._deviceData,
           &fermat.buffer[ridx].info._deviceData,
           &mDepth
-        };        
-        
-        CUDA_SAFE_CALL(hipModuleLaunchKernel(mFermatCheck,
-                                      fermat.bsize/256, 1, 1,                                
+        };
+
+        HIP_SAFE_CALL(hipModuleLaunchKernel(mFermatCheck,
+                                      fermat.bsize/256, 1, 1,
                                       256, 1, 1,
-                                      0, mHMFermatStream, arguments, 0));        
+                                      0, mHMFermatStream, arguments, 0));
+
+        HIP_SAFE_CALL(hipStreamSynchronize(mHMFermatStream));
       }
-      
-//       fermat.buffer[widx].count.copyToHost(mBig);
+
+      // Copy results back to host after all kernels complete
+      HIP_SAFE_CALL(fermat.buffer[widx].count.copyToHost(mHMFermatStream));
+      HIP_SAFE_CALL(hipStreamSynchronize(mHMFermatStream));
     } else {
       // printf(" * warning: no enough candidates available (pipeline %u)\n", pipelineIdx);
     }
@@ -282,27 +295,27 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
   sha256precalcData precalcData;
 
   lifoBuffer<hash_t> hashes(PW);
-  cudaBuffer<uint32_t> sieveBuf[2];
-  cudaBuffer<uint32_t> sieveOff[2];
-  cudaBuffer<fermat_t> sieveBuffers[SW][FERMAT_PIPELINES][2];
-  cudaBuffer<uint32_t> candidatesCountBuffers[SW][2];
+  hipBuffer<uint32_t> sieveBuf[2];
+  hipBuffer<uint32_t> sieveOff[2];
+  hipBuffer<fermat_t> sieveBuffers[SW][FERMAT_PIPELINES][2];
+  hipBuffer<uint32_t> candidatesCountBuffers[SW][2];
   pipeline_t fermat320;
   pipeline_t fermat352;
   CPrimalityTestParamsCuda testParams;
   std::vector<fermat_t> candis;
   unsigned numHashCoeff = 32768;
 
-  cudaBuffer<uint32_t> primeBuf[maxHashPrimorial];
-  cudaBuffer<uint32_t> primeBuf2[maxHashPrimorial];
+  hipBuffer<uint32_t> primeBuf[maxHashPrimorial];
+  hipBuffer<uint32_t> primeBuf2[maxHashPrimorial];
   
   hipEvent_t sieveEvent;
-  CUDA_SAFE_CALL(hipEventCreateWithFlags(&sieveEvent, hipEventBlockingSync));
+  HIP_SAFE_CALL(hipEventCreateWithFlags(&sieveEvent, hipEventBlockingSync));
   
   for (unsigned i = 0; i < maxHashPrimorial - mPrimorial; i++) {
-    CUDA_SAFE_CALL(primeBuf[i].init(mConfig.PCOUNT, true));
-    CUDA_SAFE_CALL(primeBuf[i].copyToDevice(&gPrimes[mPrimorial+i+1]));
-    CUDA_SAFE_CALL(primeBuf2[i].init(mConfig.PCOUNT*2, true));
-    CUDA_SAFE_CALL(primeBuf2[i].copyToDevice(&gPrimes2[2*(mPrimorial+i)+2]));
+    HIP_SAFE_CALL(primeBuf[i].init(mConfig.PCOUNT, true));
+    HIP_SAFE_CALL(primeBuf[i].copyToDevice(&gPrimes[mPrimorial+i+1]));
+    HIP_SAFE_CALL(primeBuf2[i].init(mConfig.PCOUNT*2, true));
+    HIP_SAFE_CALL(primeBuf2[i].copyToDevice(&gPrimes2[2*(mPrimorial+i)+2]));
     mpz_class p = 1;
     for(unsigned j = 0; j <= mPrimorial+i; j++)
       p *= gPrimes[j];
@@ -317,37 +330,37 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     LOG_F(INFO, "GPU %d: sieve size = %s (%d bits)", mID, sievesize.get_str(10).c_str(), sievebits);
   }
   
-  CUDA_SAFE_CALL(hashmod.midstate.init(8, false));
-  CUDA_SAFE_CALL(hashmod.found.init(128, false));
-  CUDA_SAFE_CALL(hashmod.primorialBitField.init(128, false));
-  CUDA_SAFE_CALL(hashmod.count.init(1, false));
-  CUDA_SAFE_CALL(hashBuf.init(PW*mConfig.N, false));
+  HIP_SAFE_CALL(hashmod.midstate.init(8, false));
+  HIP_SAFE_CALL(hashmod.found.init(128, false));
+  HIP_SAFE_CALL(hashmod.primorialBitField.init(128, false));
+  HIP_SAFE_CALL(hashmod.count.init(1, false));
+  HIP_SAFE_CALL(hashBuf.init(PW*mConfig.N, false));
   
   for(int sieveIdx = 0; sieveIdx < SW; ++sieveIdx) {
     for(int instIdx = 0; instIdx < 2; ++instIdx){
       for (int pipelineIdx = 0; pipelineIdx < FERMAT_PIPELINES; pipelineIdx++)
-        CUDA_SAFE_CALL(sieveBuffers[sieveIdx][pipelineIdx][instIdx].init(MSO, true));
+        HIP_SAFE_CALL(sieveBuffers[sieveIdx][pipelineIdx][instIdx].init(MSO, true));
       
-      CUDA_SAFE_CALL(candidatesCountBuffers[sieveIdx][instIdx].init(FERMAT_PIPELINES, false)); // CL_MEM_ALLOC_HOST_PTR
+      HIP_SAFE_CALL(candidatesCountBuffers[sieveIdx][instIdx].init(FERMAT_PIPELINES, false)); // CL_MEM_ALLOC_HOST_PTR
     }
   }
   
   for(int k = 0; k < 2; ++k){
-    CUDA_SAFE_CALL(sieveBuf[k].init(mConfig.SIZE*mConfig.STRIPES/2*mConfig.WIDTH, true));
-    CUDA_SAFE_CALL(sieveOff[k].init(mConfig.PCOUNT*mConfig.WIDTH, true));
+    HIP_SAFE_CALL(sieveBuf[k].init(mConfig.SIZE*mConfig.STRIPES/2*mConfig.WIDTH, true));
+    HIP_SAFE_CALL(sieveOff[k].init(mConfig.PCOUNT*mConfig.WIDTH, true));
   }
   
-  CUDA_SAFE_CALL(final.info.init(MFS/(4*mDepth), false)); // CL_MEM_ALLOC_HOST_PTR
-  CUDA_SAFE_CALL(final.count.init(1, false));   // CL_MEM_ALLOC_HOST_PTR
+  HIP_SAFE_CALL(final.info.init(MFS/(4*mDepth), false)); // CL_MEM_ALLOC_HOST_PTR
+  HIP_SAFE_CALL(final.count.init(1, false));   // CL_MEM_ALLOC_HOST_PTR
 
   FermatInit(fermat320, MFS);
   FermatInit(fermat352, MFS);    
 
-  cudaBuffer<uint32_t> modulosBuf[maxHashPrimorial];
+  hipBuffer<uint32_t> modulosBuf[maxHashPrimorial];
   unsigned modulosBufferSize = mConfig.PCOUNT*(mConfig.N-1);   
   for (unsigned bufIdx = 0; bufIdx < maxHashPrimorial-mPrimorial; bufIdx++) {
-    cudaBuffer<uint32_t> &current = modulosBuf[bufIdx];
-    CUDA_SAFE_CALL(current.init(modulosBufferSize, false));
+    hipBuffer<uint32_t> &current = modulosBuf[bufIdx];
+    HIP_SAFE_CALL(current.init(modulosBufferSize, false));
     for (unsigned i = 0; i < mConfig.PCOUNT; i++) {
       mpz_class X = 1;
       for (unsigned j = 0; j < mConfig.N-1; j++) {
@@ -357,7 +370,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       }
     }
     
-    CUDA_SAFE_CALL(current.copyToDevice());
+    HIP_SAFE_CALL(current.copyToDevice());
   }
 
 
@@ -430,13 +443,15 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       unsigned target = TargetGetLength(blockheader.bits);
       precalcSHA256(&blockheader, hashmod.midstate._hostData, &precalcData);
       hashmod.count[0] = 0;
-      CUDA_SAFE_CALL(hashmod.midstate.copyToDevice(mHMFermatStream));
-      CUDA_SAFE_CALL(hashmod.count.copyToDevice(mHMFermatStream));
+      HIP_SAFE_CALL(hashmod.midstate.copyToDevice(mHMFermatStream));
+      HIP_SAFE_CALL(hashmod.count.copyToDevice(mHMFermatStream));
     }
 
     // hashmod fetch & dispatch
     {
       fflush(stdout);
+
+      // Debug: Check what we're about to read
       for(unsigned i = 0; i < hashmod.count[0]; ++i) {
         hash_t hash;
         hash.iter = iteration;
@@ -492,10 +507,10 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       }
 
       if (hashmod.count[0])
-        CUDA_SAFE_CALL(hashBuf.copyToDevice(mSieveStream));
+        HIP_SAFE_CALL(hashBuf.copyToDevice(mSieveStream));
 
       hashmod.count[0] = 0;
-      
+
       int numhash = ((int)(16*mSievePerRound) - (int)hashes.remaining()) * numHashCoeff;
 
       if(numhash > 0){
@@ -506,8 +521,8 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           precalcSHA256(&blockheader, hashmod.midstate._hostData, &precalcData);
         }
 
-        CUDA_SAFE_CALL(hashmod.midstate.copyToDevice(mHMFermatStream));
-        CUDA_SAFE_CALL(hashmod.count.copyToDevice(mHMFermatStream));
+        HIP_SAFE_CALL(hashmod.midstate.copyToDevice(mHMFermatStream));
+        HIP_SAFE_CALL(hashmod.count.copyToDevice(mHMFermatStream));
 
         void *arguments[] = {
           &blockheader.nonce,
@@ -529,7 +544,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
           &precalcData.temp2_3
         };
         
-        CUDA_SAFE_CALL(hipModuleLaunchKernel(mHashMod,
+        HIP_SAFE_CALL(hipModuleLaunchKernel(mHashMod,
                                       numhash/mLSize, 1, 1,                                
                                       mLSize, 1, 1,
                                       0, mHMFermatStream, arguments, 0));
@@ -554,7 +569,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
         int hid = hashes.pop();
         unsigned primorialIdx = hashes.get(hid).primorialIdx;    
         
-        CUDA_SAFE_CALL(candidatesCountBuffers[i][widx].copyToDevice(mSieveStream));
+        HIP_SAFE_CALL(candidatesCountBuffers[i][widx].copyToDevice(mSieveStream));
         
         {
           void *arguments[] = {
@@ -566,7 +581,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
             &modulosBuf[primorialIdx]._deviceData
           };
           
-          CUDA_SAFE_CALL(hipModuleLaunchKernel(mSieveSetup,
+          HIP_SAFE_CALL(hipModuleLaunchKernel(mSieveSetup,
                                         mConfig.PCOUNT/mLSize, 1, 1,                                
                                         mLSize, 1, 1,
                                         0, mSieveStream, arguments, 0));          
@@ -579,7 +594,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
             &primeBuf2[primorialIdx]._deviceData
           };
       
-          CUDA_SAFE_CALL(hipModuleLaunchKernel(mSieve,
+          HIP_SAFE_CALL(hipModuleLaunchKernel(mSieve,
                                         mConfig.STRIPES/2, mConfig.WIDTH, 1,                                
                                         mLSize, 1, 1,
                                         0, mSieveStream, arguments, 0));
@@ -592,7 +607,7 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
             &primeBuf2[primorialIdx]._deviceData
           };
       
-          CUDA_SAFE_CALL(hipModuleLaunchKernel(mSieve,
+          HIP_SAFE_CALL(hipModuleLaunchKernel(mSieve,
                                         mConfig.STRIPES/2, mConfig.WIDTH, 1,                                
                                         mLSize, 1, 1,
                                         0, mSieveStream, arguments, 0));          
@@ -612,12 +627,12 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
             &mDepth
           };
           
-          CUDA_SAFE_CALL(hipModuleLaunchKernel(mSieveSearch,
+          HIP_SAFE_CALL(hipModuleLaunchKernel(mSieveSearch,
                                         (mConfig.SIZE*mConfig.STRIPES/2)/256, 1, 1,
                                         256, 1, 1,
                                         0, mSieveStream, arguments, 0));
           
-          CUDA_SAFE_CALL(hipEventRecord(sieveEvent, mSieveStream)); 
+          HIP_SAFE_CALL(hipEventRecord(sieveEvent, mSieveStream)); 
         }
       }
     
@@ -632,29 +647,32 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
       memcpy(&candis[0], final.info._hostData, numcandis*sizeof(fermat_t));
     
     final.count[0] = 0;
-    CUDA_SAFE_CALL(final.count.copyToDevice(mHMFermatStream));
+    HIP_SAFE_CALL(final.count.copyToDevice(mHMFermatStream));
     FermatDispatch(fermat320, sieveBuffers, candidatesCountBuffers, 0, ridx, widx, testCount, fermatCount, mFermatKernel320, mSievePerRound);
     FermatDispatch(fermat352, sieveBuffers, candidatesCountBuffers, 1, ridx, widx, testCount, fermatCount, mFermatKernel352, mSievePerRound);
 
     // copyToHost (hipMemcpyDtoHAsync) always blocking sync call!
     // syncronize our stream one time per iteration
     // sieve stream is first because it much bigger
-    CUDA_SAFE_CALL(hipEventSynchronize(sieveEvent)); 
+    HIP_SAFE_CALL(hipEventSynchronize(sieveEvent)); 
     #ifdef __WINDOWS__  
-    CUDA_SAFE_CALL(hipCtxSynchronize());
+    HIP_SAFE_CALL(hipDeviceSynchronize());
     #endif
     for (unsigned i = 0; i < mSievePerRound; i++)
-      CUDA_SAFE_CALL(candidatesCountBuffers[i][widx].copyToHost(mSieveStream));
+      HIP_SAFE_CALL(candidatesCountBuffers[i][widx].copyToHost(mSieveStream));
     
     // Synchronize Fermat stream, copy all needed data
-    CUDA_SAFE_CALL(hashmod.found.copyToHost(mHMFermatStream));
-    CUDA_SAFE_CALL(hashmod.primorialBitField.copyToHost(mHMFermatStream));
-    CUDA_SAFE_CALL(hashmod.count.copyToHost(mHMFermatStream));
-    CUDA_SAFE_CALL(fermat320.buffer[widx].count.copyToHost(mHMFermatStream));
-    CUDA_SAFE_CALL(fermat352.buffer[widx].count.copyToHost(mHMFermatStream));
-    CUDA_SAFE_CALL(final.info.copyToHost(mHMFermatStream));
-    CUDA_SAFE_CALL(final.count.copyToHost(mHMFermatStream));
-    
+    HIP_SAFE_CALL(hashmod.found.copyToHost(mHMFermatStream));
+    HIP_SAFE_CALL(hashmod.primorialBitField.copyToHost(mHMFermatStream));
+    HIP_SAFE_CALL(hashmod.count.copyToHost(mHMFermatStream));
+    HIP_SAFE_CALL(fermat320.buffer[widx].count.copyToHost(mHMFermatStream));
+    HIP_SAFE_CALL(fermat352.buffer[widx].count.copyToHost(mHMFermatStream));
+    HIP_SAFE_CALL(final.info.copyToHost(mHMFermatStream));
+    HIP_SAFE_CALL(final.count.copyToHost(mHMFermatStream));
+
+    // Wait for all async copies to complete before reading the data in this iteration
+    HIP_SAFE_CALL(hipStreamSynchronize(mHMFermatStream));
+
     // adjust sieves per round
     if (fermat320.buffer[ridx].count[0] && fermat320.buffer[ridx].count[0] < mBlockSize &&
         fermat352.buffer[ridx].count[0] && fermat352.buffer[ridx].count[0] < mBlockSize) {
@@ -784,13 +802,13 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
 
     // Print mining stats
     MineContext* mineCtxArray = &mineCtx;  // Create a pointer to our single MineContext
-    printMiningStats(workBeginPoint, mineCtxArray, 1, sieveSizeInGb, 
-                    workTemplate ? workTemplate->height : 0, 
+    printMiningStats(workBeginPoint, mineCtxArray, 1, sieveSizeInGb,
+                    workTemplate ? workTemplate->height : 0,
                     GetPrimeDifficulty(blockheader.bits), 4);
-    
+
     if(MakeExit)
       break;
-    
+
     iteration++;
   }
   
@@ -952,22 +970,22 @@ int main(int argc, char **argv) {
 
   if (!gWallet && !isBenchmark) {
     fprintf(stderr, "Error: you must specify wallet\n");
+    printHelpMessage();
     exit(1);
   }
+
   printf("block sum is %d\n", gThreadsNum);
-  GetBlockTemplateContext* getblock = new GetBlockTemplateContext(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
-  getblock->run();
-  blktemplate_t *workTemplate = 0;
-  unsigned int dataId;
-  bool hasChanged;
-  //while(!(workTemplate = getblock->get(0, workTemplate, &dataId, &hasChanged) ) ) {
-  //  printf("blocktemplate %ld\n", (long int)workTemplate);
-  //  usleep(500);
-  //}
-  //printf("blocktemplate_rwrqwrqw %ld\n", (long int)workTemplate);
-  //printf("block height %d\n", workTemplate->height);
-  
-  SubmitContext *submit = new SubmitContext(0, gUrl, gUserName, gPassword);
+
+  // Only initialize RPC contexts if NOT in benchmark mode
+  // Benchmark mode doesn't need network connection
+  GetBlockTemplateContext* getblock = nullptr;
+  SubmitContext *submit = nullptr;
+
+  if (!isBenchmark) {
+    getblock = new GetBlockTemplateContext(0, gUrl, gUserName, gPassword, gWallet, 4, gThreadsNum, extraNonce);
+    getblock->run();
+    submit = new SubmitContext(0, gUrl, gUserName, gPassword);
+  }
 
   {
     int np = sizeof(gPrimes)/sizeof(unsigned);
@@ -980,29 +998,41 @@ int main(int argc, char **argv) {
     }
   }
 
-  unsigned clKernelLSize = 1024;
-  unsigned clKernelLSizeLog2 = 10;
-  std::vector<CUDADeviceInfo> gpus;
+  // AMD GPU optimization: Use smaller workgroup size for better occupancy
+  // RDNA GPUs (wavefront size 32) prefer 128 or 256 threads per block
+  // Default to 256 for good balance (8 wavefronts on RDNA)
+  unsigned clKernelLSize = 256;   // Changed from 1024 - AMD RDNA optimization
+  unsigned clKernelLSizeLog2 = 8; // Changed from 10 (2^8 = 256)
+
+  std::vector<HIPDeviceInfo> gpus;
   int devicesNum = 0;
-  CUDA_SAFE_CALL(hipInit(0));
-  CUDA_SAFE_CALL(hipGetDeviceCount(&devicesNum));
+  HIP_SAFE_CALL(hipInit(0));
+  HIP_SAFE_CALL(hipGetDeviceCount(&devicesNum));
   printf("number of devices %d\n", devicesNum);
   std::map<int,int> mDeviceMap;
   std::map<int,int> mDeviceMapRev;
 
   for (unsigned i = 0; i < devicesNum; i++) {
       char name[128];
-      CUDADeviceInfo info;
+      HIPDeviceInfo info;
       mDeviceMap[i] = gpus.size();
       mDeviceMapRev[gpus.size()] = i;
       info.index = i;
-      CUDA_SAFE_CALL(hipDeviceGet(&info.device, i));
-      CUDA_SAFE_CALL(hipDeviceGetAttribute(&info.majorComputeCapability, hipDeviceAttributeComputeCapabilityMajor, info.device));
-      CUDA_SAFE_CALL(hipDeviceGetAttribute(&info.minorComputeCapability, hipDeviceAttributeComputeCapabilityMinor, info.device));
-      CUDA_SAFE_CALL(hipCtxCreate(&info.context, hipDeviceScheduleAuto, info.device));
-      CUDA_SAFE_CALL(hipDeviceGetName(name, sizeof(name), info.device));
+      HIP_SAFE_CALL(hipDeviceGet(&info.device, i));
+      HIP_SAFE_CALL(hipDeviceGetAttribute(&info.majorComputeCapability, hipDeviceAttributeComputeCapabilityMajor, info.device));
+      HIP_SAFE_CALL(hipDeviceGetAttribute(&info.minorComputeCapability, hipDeviceAttributeComputeCapabilityMinor, info.device));
+
+      // Get the actual gcnArchName for AMD GPUs
+      hipDeviceProp_t props;
+      HIP_SAFE_CALL(hipGetDeviceProperties(&props, i));
+      strncpy(info.gcnArchName, props.gcnArchName, sizeof(info.gcnArchName) - 1);
+      info.gcnArchName[sizeof(info.gcnArchName) - 1] = '\0';
+
+      HIP_SAFE_CALL(hipCtxCreate(&info.context, hipDeviceScheduleAuto, info.device));
+      HIP_SAFE_CALL(hipDeviceGetName(name, sizeof(name), info.device));
       gpus.push_back(info);
-      LOG_F(INFO, "[%i] %s; Compute capability %i.%i", (int)gpus.size()-1, name, info.majorComputeCapability, info.minorComputeCapability);
+      LOG_F(INFO, "[%i] %s; Compute capability %i.%i; gcnArchName: %s",
+            (int)gpus.size()-1, name, info.majorComputeCapability, info.minorComputeCapability, info.gcnArchName);
   }
 
   // generate kernel configuration file
@@ -1010,8 +1040,9 @@ int main(int argc, char **argv) {
     unsigned clKernelStripes = 210;
     unsigned clKernelPCount = 65536;
     unsigned clKernelWindowSize = 12288;
-    unsigned clKernelLSize = 1024;
-    unsigned clKernelLSizeLog2 = 10;
+    // Use the same optimized workgroup size for config generation
+    unsigned clKernelLSize = 256;       // AMD RDNA optimization (was 1024)
+    unsigned clKernelLSizeLog2 = 8;     // log2(256) = 8 (was 10)
     unsigned clKernelTarget = 10;
     unsigned clKernelWidth = 20;
     unsigned multiplierSizeLimits[3] = {24, 31, 35};
@@ -1029,20 +1060,81 @@ int main(int argc, char **argv) {
     dumpSieveConstants(clKernelPCount, clKernelLSize, clKernelWindowSize*32, gPrimes+13, config);
   }
 
-  std::string arguments = "";
+  // Build compiler arguments with all the defines from config.cu
+  unsigned clKernelStripes = 210;
+  unsigned clKernelPCount = 65536;
+  unsigned clKernelWindowSize = 12288;
+  unsigned clKernelLSizeForCompile = 256;      // AMD RDNA optimization
+  unsigned clKernelLSizeLog2ForCompile = 8;    // log2(256) = 8
+  unsigned clKernelTarget = 10;
+  unsigned clKernelWidth = 20;
+  unsigned multiplierSizeLimits[3] = {24, 31, 35};
+
+  // Calculate SIEVERANGE constants (same logic as dumpSieveConstants)
+  unsigned windowSize = clKernelWindowSize * 32;
+  unsigned ranges[3] = {0, 0, 0};
+  for (unsigned i = 0; i < clKernelPCount/clKernelLSizeForCompile; i++) {
+    unsigned prime = gPrimes[13 + i*clKernelLSizeForCompile];
+    if (ranges[0] == 0 && windowSize/prime <= 2)
+      ranges[0] = i;
+    if (ranges[1] == 0 && windowSize/prime <= 1)
+      ranges[1] = i;
+    if (ranges[2] == 0 && windowSize/prime == 0)
+      ranges[2] = i;
+  }
+
+  // Create separate buffers for each define (must remain in scope for hipCompileKernel)
+  static char defineStripes[64], defineWidth[64], definePCount[64], defineTarget[64];
+  static char defineSize[64], defineLSize[64], defineLSizeLog2[64];
+  static char defineLimit13[64], defineLimit14[64], defineLimit15[64];
+  static char defineSieveRange1[64], defineSieveRange2[64], defineSieveRange3[64];
+  static char includePathBuf1[256], includePathBuf2[256];
+
+  sprintf(defineStripes, "-DSTRIPES=%u", clKernelStripes);
+  sprintf(defineWidth, "-DWIDTH=%u", clKernelWidth);
+  sprintf(definePCount, "-DPCOUNT=%u", clKernelPCount);
+  sprintf(defineTarget, "-DTARGET=%u", clKernelTarget);
+  sprintf(defineSize, "-DSIZE=%u", clKernelWindowSize);
+  sprintf(defineLSize, "-DLSIZE=%u", clKernelLSizeForCompile);
+  sprintf(defineLSizeLog2, "-DLSIZELOG2=%u", clKernelLSizeLog2ForCompile);
+  sprintf(defineLimit13, "-DLIMIT13=%u", multiplierSizeLimits[0]);
+  sprintf(defineLimit14, "-DLIMIT14=%u", multiplierSizeLimits[1]);
+  sprintf(defineLimit15, "-DLIMIT15=%u", multiplierSizeLimits[2]);
+  sprintf(defineSieveRange1, "-DSIEVERANGE1=%u", ranges[0]);
+  sprintf(defineSieveRange2, "-DSIEVERANGE2=%u", ranges[1]);
+  sprintf(defineSieveRange3, "-DSIEVERANGE3=%u", ranges[2]);
+  sprintf(includePathBuf1, "-Ixpm/cuda");
+  sprintf(includePathBuf2, "-I../src/Hip");
+
   std::vector<hipModule_t> modules;
   modules.resize(gpus.size());
   for (unsigned i = 0; i < gpus.size(); i++) {
     char kernelname[64];
     char ccoption[64];
-    sprintf(kernelname, "kernelxpm_gpu%u.ptx", gpus[i].index);
-        sprintf(ccoption, "--gpu-architecture=compute_%i%i", gpus[i].majorComputeCapability, gpus[i].minorComputeCapability);
-    const char *options[] = { ccoption, arguments.c_str() };
-    CUDA_SAFE_CALL(hipCtxSetCurrent(gpus[i].context));
-    if (!cudaCompileKernel(kernelname,
-        { "xpm/cuda/helpers.cu", "xpm/cuda/config.cu", "xpm/cuda/procs.cu", "xpm/cuda/fermat.cu", "xpm/cuda/sieve.cu", "xpm/cuda/sha256.cu", "xpm/cuda/benchmarks.cu"},
+    sprintf(kernelname, "kernelxpm_gpu%u.hipbin", gpus[i].index);
+    // Use the actual gcnArchName reported by the device
+    sprintf(ccoption, "--offload-arch=%s", gpus[i].gcnArchName);
+
+    // Each -D flag must be a separate array element for HIPRTC
+    // AMD GPU optimization: Enable unsafe FP atomics for faster atomic operations
+    // NOTE: Temporarily disabled to test if it's causing synchronization issues
+    const char *options[] = {
+      ccoption,
+      // "-munsafe-fp-atomics",  // AMD optimization: 10-100x faster atomics - DISABLED for testing
+      // "-Rpass-analysis=kernel-resource-usage",  // DIAGNOSTIC COMPLETED: Confirmed no VGPR spilling
+      includePathBuf1,  // xpm/cuda for kernel source files
+      includePathBuf2,  // ../src/Hip for header files
+      defineStripes, defineWidth, definePCount, defineTarget,
+      defineSize, defineLSize, defineLSizeLog2,
+      defineLimit13, defineLimit14, defineLimit15,
+      defineSieveRange1, defineSieveRange2, defineSieveRange3
+    };
+
+    HIP_SAFE_CALL(hipCtxSetCurrent(gpus[i].context));
+    if (!hipCompileKernel(kernelname,
+        { "xpm/cuda/fermat_hip.cpp", "xpm/cuda/procs_hip.cpp", "xpm/cuda/sieve_hip.cpp", "xpm/cuda/sha256_hip.cpp", "xpm/cuda/benchmarks_kernels_hip.cpp"},
         options,
-        arguments.empty() ? 1 : 2,
+        16,  // 1 architecture + 2 include paths + 13 define flags
         &modules[i],
         gpus[i].majorComputeCapability,
         gpus[i].minorComputeCapability,
@@ -1055,14 +1147,12 @@ int main(int argc, char **argv) {
   depth = std::min(depth, 5);
 
   if (isBenchmark) {
-    // Run benchmarks and exit
     for (unsigned i = 0; i < gpus.size(); i++) {
-      cudaRunBenchmarks(gpus[i].context, gpus[i].device, modules[i], depth, clKernelLSize);
+      hipRunBenchmarks(gpus[i].context, gpus[i].device, modules[i], depth, clKernelLSize);
     }
-    return 0;
+    return 0;  // Exit after benchmark
   }
 
-  // Normal mining mode
   unsigned int sievePerRound = 5;
   for(unsigned i = 0; i < gpus.size(); ++i) {
       PrimeMiner* miner = new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
