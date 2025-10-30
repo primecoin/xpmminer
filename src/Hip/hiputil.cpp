@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 #include "hiputil.h"
 #include <string.h>
 #include <fstream>
@@ -47,30 +48,33 @@ bool hipCompileKernel(const char *kernelName,
     char *log = new char[logSize];
     HIPRTC_SAFE_CALL(hiprtcGetProgramLog(prog, log));
 
-    // Print log if there are warnings or errors
+    // Always print log to help with debugging
     if (logSize > 1) {
-      LOG_F(INFO, "Compilation log:\n%s", log);
+      LOG_F(INFO, "HIPRTC Compilation log:\n%s", log);
     }
-    delete[] log;
 
     if (compileResult != HIPRTC_SUCCESS) {
       LOG_F(ERROR, "hiprtcCompileProgram error: %s", hiprtcGetErrorString(compileResult));
+      if (logSize > 1) {
+        LOG_F(ERROR, "Compilation errors:\n%s", log);
+      }
+      delete[] log;
       return false;
     }
+    delete[] log;
 
-    // Obtain code (machine code or LLVM bitcode) from the program.
-    // Note: HIP uses hiprtcGetCode() instead of nvrtcGetPTX()
-    size_t codeSize;
-    HIPRTC_SAFE_CALL(hiprtcGetCodeSize(prog, &codeSize));
-    char *code = new char[codeSize];
-    HIPRTC_SAFE_CALL(hiprtcGetCode(prog, code));
+    // Obtain PTX from the program.
+    size_t ptxSize;
+    HIPRTC_SAFE_CALL(hiprtcGetCodeSize(prog, &ptxSize));
+    char *ptx = new char[ptxSize];
+    HIPRTC_SAFE_CALL(hiprtcGetCode(prog, ptx));
 
     // Destroy the program.
     HIPRTC_SAFE_CALL(hiprtcDestroyProgram(&prog));
 
     {
       std::ofstream bin(kernelName, std::ofstream::binary | std::ofstream::trunc);
-      bin.write(code, codeSize);
+      bin.write(ptx, ptxSize);
       bin.close();
     }
 
@@ -94,13 +98,21 @@ bool hipCompileKernel(const char *kernelName,
   bfile.read(code.get(), binsize);
   bfile.close();
 
+  LOG_F(INFO, "Loading HIP module from %s (%zu bytes)", kernelName, binsize);
+
   hipError_t result = hipModuleLoadData(module, code.get());
   if (result != hipSuccess) {
-    const char *msg;
-    msg = hipGetErrorName(result);
+    const char *msg = hipGetErrorName(result);
     LOG_F(ERROR, "Loading HIP module failed with error %s", msg);
+    LOG_F(ERROR, "Module size: %zu bytes, first 16 bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+          binsize,
+          (unsigned char)code[0], (unsigned char)code[1], (unsigned char)code[2], (unsigned char)code[3],
+          (unsigned char)code[4], (unsigned char)code[5], (unsigned char)code[6], (unsigned char)code[7],
+          (unsigned char)code[8], (unsigned char)code[9], (unsigned char)code[10], (unsigned char)code[11],
+          (unsigned char)code[12], (unsigned char)code[13], (unsigned char)code[14], (unsigned char)code[15]);
     return false;
   }
 
+  LOG_F(INFO, "HIP module loaded successfully");
   return true;
 }

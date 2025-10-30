@@ -14,7 +14,7 @@
 #include <gmp.h>
 #include <gmpxx.h>
 #include "getblocktemplate.h"
-#include "hiputil_auto.h"
+#include "hiputil.h"
 #include "uint256.h"
 #include "sha256.h"
 #include "system.h"

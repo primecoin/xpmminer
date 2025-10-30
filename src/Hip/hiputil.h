@@ -1,7 +1,7 @@
 #ifndef __HIPLIB_H_
 #define __HIPLIB_H_
 
-#include <hip/hip_runtime_api.h>
+#include <hip/hip_runtime.h>
 #include <hip/hiprtc.h>
 #include "loguru.hpp"
 #include <string>
@@ -20,8 +20,7 @@ do { \
 do { \
   hipError_t result = x; \
   if (result != hipSuccess) { \
-    const char *msg; \
-    msg = hipGetErrorName(result); \
+    const char *msg = hipGetErrorName(result); \
     LOG_F(ERROR, "\nerror: %i\nfailed with error %s at %s:%d\n", static_cast<int>(result), msg, __FILE__, __LINE__); \
     exit(1); \
   } \
@@ -42,8 +41,7 @@ public:
     if (_deviceData) {
       hipError_t result = hipFree((void*)_deviceData);
       if (result != hipSuccess) {
-        const char *msg;
-        msg = hipGetErrorName(result);
+        const char *msg = hipGetErrorName(result);
         LOG_F(ERROR, "HIP memory free failed with error %s code: %i\n", msg, static_cast<int>(result));
       }
     }
@@ -53,7 +51,7 @@ public:
     _size = size;
     if (!hostNoAccess)
       _hostData = new T[size];
-    return hipMalloc((void**)&_deviceData, sizeof(T)*size);
+    return hipMalloc(&_deviceData, sizeof(T)*size);
   }
 
   hipError_t copyToDevice() {

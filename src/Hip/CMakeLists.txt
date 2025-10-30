@@ -85,7 +85,7 @@ include_directories(
 set(HIP_MINER_SOURCES
     xpmclient_hip.cpp
     benchmarks_hip.cpp
-    hiputil_auto.cpp
+    hiputil.cpp
     gprimes.cpp
     sha256.cpp
     prime.cpp
