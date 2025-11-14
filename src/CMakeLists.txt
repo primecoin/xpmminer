@@ -4,9 +4,10 @@ option(DEBUG_MINING_AMD_OPENCL "Print performance counters")
 option(BUILDCPUMINER "build CPU miner" ON)
 option(BUILDOPENCLMINER "build OpenCL miner" ON)
 option(BUILDCUDAMINER "build CUDA miner" ON)
+option(BUILDHIPMINER "build HIP miner (for AMD GPUs via ROCm)" ON)
 
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
-  ${CMAKE_SOURCE_DIR}/cmake
+        ${CMAKE_SOURCE_DIR}/cmake
 )
 
 find_package(OpenSSL REQUIRED)
@@ -29,15 +30,15 @@ elseif (APPLE)
   set(OS_DARWIN 1)
   set(OS_COMMONUNIX 1)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
-  set(OS_FREEBSD 1) 
+  set(OS_FREEBSD 1)
   set(OS_COMMONUNIX 1)
 endif()
 
 if(MSVC)
   add_definitions(
-    -D_CRT_SECURE_NO_DEPRECATE
-    -D_CRT_SECURE_NO_WARNINGS
-    -D_CRT_NONSTDC_NO_DEPRECATE
+          -D_CRT_SECURE_NO_DEPRECATE
+          -D_CRT_SECURE_NO_WARNINGS
+          -D_CRT_NONSTDC_NO_DEPRECATE
   )
 endif(MSVC)
 
@@ -48,14 +49,14 @@ if (NOT INT128_SIZE)
 endif()
 
 configure_file(
-  ${CMAKE_SOURCE_DIR}/include/config.h.in
-  ${CMAKE_BINARY_DIR}/include/config.h
+        ${CMAKE_SOURCE_DIR}/include/config.h.in
+        ${CMAKE_BINARY_DIR}/include/config.h
 )
 
 include_directories(
-  ${CMAKE_SOURCE_DIR}/include
-  ${CMAKE_BINARY_DIR}/include
-  ${CMAKE_SOURCE_DIR}/blkmaker
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_BINARY_DIR}/include
+        ${CMAKE_SOURCE_DIR}/blkmaker
 )
 
 add_subdirectory(blkmaker)
@@ -68,4 +69,7 @@ IF (BUILDOPENCLMINER)
 ENDIF()
 IF (BUILDCUDAMINER)
   add_subdirectory(Cuda)
+ENDIF()
+IF (BUILDHIPMINER)
+  add_subdirectory(Hip)
 ENDIF()
