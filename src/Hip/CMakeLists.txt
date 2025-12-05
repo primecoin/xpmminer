@@ -39,6 +39,15 @@ endif()
 
 message(STATUS "HIPRTC library: ${HIP_HIPRTC_LIBRARY}")
 
+# Find libwebsockets (for getwork protocol)
+find_package(Libwebsockets QUIET)
+if (Libwebsockets_FOUND)
+    message(STATUS "libwebsockets found: ${Libwebsockets_VERSION}")
+else()
+    message(STATUS "libwebsockets not found. getwork protocol will not be available.")
+    message(STATUS "  To enable getwork: install libwebsockets-dev (Debian/Ubuntu) or libwebsockets (other)")
+endif()
+
 # Compiler flags
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -81,6 +90,11 @@ include_directories(
   ${ROCM_PATH}/include
 )
 
+if (Libwebsockets_FOUND)
+  include_directories(${LIBWEBSOCKETS_INCLUDE_DIRS})
+  add_definitions(-DHAVE_LIBWEBSOCKETS)
+endif()
+
 # Source files
 set(HIP_MINER_SOURCES
     xpmclient_hip.cpp
@@ -111,6 +125,10 @@ target_link_libraries(xpmhip
   ${HIP_HIPRTC_LIBRARY}  # HIPRTC for runtime compilation
   dl
 )
+
+if (Libwebsockets_FOUND)
+  target_link_libraries(xpmhip ${LIBWEBSOCKETS_LIBRARIES})
+endif()
 
 # Post-build: Auto-copy kernel files to build directory
 # This makes the binary work immediately after 'make' without manual file copying

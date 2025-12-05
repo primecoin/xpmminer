@@ -15,6 +15,15 @@ find_package(OpenSSL REQUIRED)
 IF (BUILDOPENCLMINER)
   include(FindOpenCL)
 endif()
+
+# Find libwebsockets for getwork protocol support
+find_package(Libwebsockets QUIET)
+if (Libwebsockets_FOUND)
+    message(STATUS "libwebsockets found: ${Libwebsockets_VERSION}")
+else()
+    message(STATUS "libwebsockets not found. getwork protocol will not be available.")
+endif()
+
 include(FindDependencies)
 include(TestBigEndian)
 include(CheckTypeSize)

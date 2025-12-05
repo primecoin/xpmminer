@@ -13,6 +13,7 @@
 #include <gmp.h>
 #include <gmpxx.h>
 #include "getblocktemplate.h"
+#include "getwork_client.h"
 #include "hiputil.h"
 #include "sha256.h"
 #include "system.h"
@@ -197,6 +198,7 @@ class PrimeMiner {
 
     bool MakeExit;
     void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
+    void MiningGetWork(GetWorkContext* ctx);
 
    private:
     void FermatInit(pipeline_t& fermat, unsigned mfs);
@@ -234,6 +236,16 @@ class PrimeMiner {
     hipFunction_t mFermatKernel352;
     hipFunction_t mFermatKernel320;
     hipFunction_t mFermatCheck;
+
+    // JSON getwork mode kernel and buffers
+    hipFunction_t mJsonHashMod;
+    hipBuffer<uint32_t> mJsonMidstateBuf; // JSON SHA256 midstate (8 uint32_t)
+    hipBuffer<char>
+        mJsonRemainingPrefixBuf; // Remaining JSON prefix after midstate
+    hipBuffer<uint32_t> mJsonFoundBuf; // Found nonces for JSON mode
+    hipBuffer<uint32_t> mJsonPrimorialBuf; // Primorial bit fields for JSON mode
+    hipBuffer<uint32_t> mJsonCountBuf; // Count of found candidates
+
     info_t final;
     hipBuffer<uint32_t> hashBuf;
     timeMark workBeginPoint;
