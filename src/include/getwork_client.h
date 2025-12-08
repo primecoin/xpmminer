@@ -3,6 +3,8 @@
 
 #include "getwork.h"
 #include <pthread.h>
+#include <queue>
+#include <string>
 
 #ifdef HAVE_LIBWEBSOCKETS
 #include <libwebsockets.h>
@@ -40,12 +42,19 @@ private:
     bool _connected;
     bool _hasWork;
     bool _needsRefresh;           // Flag to force work refresh
+    bool _hasPendingWrites;       // Flag to signal pending writes (thread-safe)
+    time_t _lastMessageTime;      // Track last received message for timeout detection
 
     // JSON-RPC request ID counter
     int _rpcId;
 
+    // Message queue for thread-safe WebSocket writes
+    std::queue<std::string> _pendingMessages;
+    pthread_mutex_t _queueMutex;
+
     void onMessage(const char* data, size_t len);
     void sendGetWork();
+    void sendGetWorkInternal(struct lws* wsi);  // Internal version called from callback
     void attemptReconnect();  // Try to reconnect to WebSocket server
     static void* runThread(void* arg);
 
@@ -57,6 +66,7 @@ public:
     bool get(unsigned idx, JsonWork* work, bool* hasChanged);
     uint64_t getBlockHeight();
     double getDifficulty();
+    uint64_t getWorkId();  // Get current work ID (changes when block changes)
     bool isConnected();  // Check if WebSocket is connected
     void requestWork();  // Request fresh work immediately
     void triggerRefresh();  // Set refresh flag and request work

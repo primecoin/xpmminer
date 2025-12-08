@@ -1155,6 +1155,7 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
     time_t time2 = time(0);
     time_t timeValidationLog = time(0); // For periodic validation logging
     uint64_t testCount = 0;
+    uint64_t roundWorkId = 0; // Track work ID to detect stale work
 
     unsigned iteration = 0;
     mpz_class primorial[maxHashPrimorial];
@@ -1305,20 +1306,27 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         {
             // Try to get work, but don't loop forever if disconnected
             int attempts = 0;
+            static bool disconnectLogged =
+                false; // Track if we've logged disconnection
             while (!ctx->get(mID, &currentWork, &hasChanged)) {
                 usleep(100000); // 100ms
                 attempts++;
                 // Check connection every second
                 if (attempts >= 10) {
                     if (!ctx->isConnected()) {
-                        LOG_F(
-                            WARNING,
-                            "GPU %d: Disconnected from server, waiting for reconnection...",
-                            mID);
+                        // Only log once when disconnected, not every 2 seconds
+                        if (!disconnectLogged) {
+                            LOG_F(
+                                WARNING,
+                                "GPU %d: Disconnected from server, waiting for reconnection...",
+                                mID);
+                            disconnectLogged = true;
+                        }
                         attempts = 0;
                         usleep(1000000); // Wait 1 second before retrying
                     } else {
                         attempts = 0; // Reset counter if still connected
+                        disconnectLogged = false; // Reset flag when reconnected
                     }
                 }
             }
@@ -1326,6 +1334,7 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             if (currentWork.isValid() && hasChanged) {
                 run = true;
                 reset = true;
+                roundWorkId = ctx->getWorkId(); // Store work ID for this round
             }
         }
 
@@ -1390,6 +1399,16 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                 "GPU %d: JSON midstate prepared (prefix_len=%u)",
                 mID,
                 midstateData.totalPrefixLen);
+        }
+
+        // Check if work has changed during mining (detect stale work)
+        // If work changed, skip this round and get new work
+        if (ctx->getWorkId() != roundWorkId) {
+            LOG_F(
+                WARNING,
+                "GPU %d: Work changed during mining, restarting round",
+                mID);
+            continue; // Go back to get new work
         }
 
         // JSON-based hash generation on GPU
@@ -1933,14 +1952,23 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                     bool submitted = false;
                     if (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) {
-                        submitted = ctx->submitWork(
-                            currentWork, hash.nonce, targetMultiplier);
+                        // Check if work has changed before submitting (prevent
+                        // stale submissions)
+                        if (ctx->getWorkId() != roundWorkId) {
+                            LOG_F(
+                                INFO,
+                                "GPU %d: Skipping stale submission (work changed)",
+                                mID);
+                        } else {
+                            submitted = ctx->submitWork(
+                                currentWork, hash.nonce, targetMultiplier);
 
-                        // If submitted, trigger refresh request (don't wait,
-                        // continue mining)
-                        if (submitted) {
-                            ctx->triggerRefresh(); // Request new work
-                                                   // immediately
+                            // If submitted, trigger refresh request (don't
+                            // wait, continue mining)
+                            if (submitted) {
+                                ctx->triggerRefresh(); // Request new work
+                                                       // immediately
+                            }
                         }
                     }
 

@@ -49,8 +49,46 @@ int GetWorkContext::wsCallback(struct lws* wsi, enum lws_callback_reasons reason
             break;
 
         case LWS_CALLBACK_CLIENT_WRITEABLE:
-            // Now we can safely send data
-            ctx->sendGetWork();
+            // Process pending messages from the queue first
+            pthread_mutex_lock(&ctx->_queueMutex);
+            if (!ctx->_pendingMessages.empty()) {
+                std::string msg = ctx->_pendingMessages.front();
+                ctx->_pendingMessages.pop();
+                bool hasMore = !ctx->_pendingMessages.empty();
+                pthread_mutex_unlock(&ctx->_queueMutex);
+
+                // Write the queued message
+                unsigned char buf[LWS_PRE + 4096];
+                size_t len = msg.length();
+                if (len > 0 && len < 4096) {
+                    memcpy(&buf[LWS_PRE], msg.c_str(), len);
+                    lws_write(wsi, &buf[LWS_PRE], len, LWS_WRITE_TEXT);
+                }
+
+                // If more messages in queue, request another callback
+                if (hasMore) {
+                    lws_callback_on_writable(wsi);
+                }
+            } else {
+                pthread_mutex_unlock(&ctx->_queueMutex);
+                // No pending messages, send periodic getwork request
+                ctx->sendGetWorkInternal(wsi);
+            }
+            break;
+
+        case LWS_CALLBACK_EVENT_WAIT_CANCELLED:
+            // Called when lws_cancel_service() wakes us up from another thread
+            // This is the thread-safe way to trigger writes from mining thread
+            pthread_mutex_lock(&ctx->_mutex);
+            if (ctx->_hasPendingWrites && ctx->_wsi) {
+                ctx->_hasPendingWrites = false;
+                struct lws* local_wsi = ctx->_wsi;
+                pthread_mutex_unlock(&ctx->_mutex);
+                // Now safe - we're in lws thread, can call lws_callback_on_writable
+                lws_callback_on_writable(local_wsi);
+            } else {
+                pthread_mutex_unlock(&ctx->_mutex);
+            }
             break;
 
         case LWS_CALLBACK_CLOSED:
@@ -58,7 +96,16 @@ int GetWorkContext::wsCallback(struct lws* wsi, enum lws_callback_reasons reason
             pthread_mutex_lock(&ctx->_mutex);
             ctx->_connected = false;
             ctx->_wsi = nullptr;  // Clear pointer to avoid using stale connection
+            ctx->_hasWork = false;  // Invalidate work on disconnect
+            ctx->_workId++;  // Signal work changed (triggers mining loop restart)
             pthread_mutex_unlock(&ctx->_mutex);
+
+            // Clear pending message queue - old submissions are worthless after disconnect
+            pthread_mutex_lock(&ctx->_queueMutex);
+            while (!ctx->_pendingMessages.empty()) {
+                ctx->_pendingMessages.pop();
+            }
+            pthread_mutex_unlock(&ctx->_queueMutex);
             break;
 
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
@@ -66,7 +113,35 @@ int GetWorkContext::wsCallback(struct lws* wsi, enum lws_callback_reasons reason
             pthread_mutex_lock(&ctx->_mutex);
             ctx->_connected = false;
             ctx->_wsi = nullptr;  // Clear pointer to avoid using stale connection
+            ctx->_hasWork = false;  // Invalidate work on connection error
+            ctx->_workId++;  // Signal work changed (triggers mining loop restart)
             pthread_mutex_unlock(&ctx->_mutex);
+
+            // Clear pending message queue - old submissions are worthless after disconnect
+            pthread_mutex_lock(&ctx->_queueMutex);
+            while (!ctx->_pendingMessages.empty()) {
+                ctx->_pendingMessages.pop();
+            }
+            pthread_mutex_unlock(&ctx->_queueMutex);
+            break;
+
+        case LWS_CALLBACK_WSI_DESTROY:
+        case LWS_CALLBACK_CLIENT_CLOSED:
+            // Additional disconnect callbacks that may fire instead of CLOSED
+            logFormattedWrite(ctx->_log, "WebSocket destroyed/closed (callback)");
+            pthread_mutex_lock(&ctx->_mutex);
+            ctx->_connected = false;
+            ctx->_wsi = nullptr;
+            ctx->_hasWork = false;  // Invalidate work on disconnect
+            ctx->_workId++;  // Signal work changed (triggers mining loop restart)
+            pthread_mutex_unlock(&ctx->_mutex);
+
+            // Clear pending message queue
+            pthread_mutex_lock(&ctx->_queueMutex);
+            while (!ctx->_pendingMessages.empty()) {
+                ctx->_pendingMessages.pop();
+            }
+            pthread_mutex_unlock(&ctx->_queueMutex);
             break;
 
         default:
@@ -78,6 +153,9 @@ int GetWorkContext::wsCallback(struct lws* wsi, enum lws_callback_reasons reason
 
 // Parse incoming JSON-RPC message
 void GetWorkContext::onMessage(const char* data, size_t len) {
+    // Update last message time for timeout detection
+    _lastMessageTime = time(0);
+
     // Only log full message in debug mode
     // logFormattedWrite(_log, "Received message (%zu bytes): %.*s", len, (int)len, data);
 
@@ -108,23 +186,56 @@ void GetWorkContext::onMessage(const char* data, size_t len) {
     // Check if this is a submit response (result is boolean true)
     if (json_is_boolean(result) && json_is_true(result)) {
         json_decref(root);
-        // Trigger refresh to get new work
-        triggerRefresh();
+
+        // We're already in lws thread, so directly request new work
+        // (don't use triggerRefresh() which would call lws_cancel_service from within lws thread)
+        pthread_mutex_lock(&_mutex);
+        _needsRefresh = true;
+        struct lws* wsi = _wsi;
+        pthread_mutex_unlock(&_mutex);
+
+        if (wsi) {
+            lws_callback_on_writable(wsi);  // Safe - we're in lws thread
+        }
         return;
     }
 
     // Check if this is an error/string response (like "insufficient work", "stale work")
     if (json_is_string(result)) {
         const char* msg = json_string_value(result);
-        logFormattedWrite(_log, "Block submission failed: %s", msg);
 
-        // If work is stale, trigger refresh to get new work
+        // Throttle "stale work" log spam - only log once per block height
         if (msg && strcmp(msg, "stale work") == 0) {
+            static uint64_t lastStaleLogHeight = 0;
+
+            pthread_mutex_lock(&_mutex);
+            uint64_t currentHeight = _currentWork.height;
+            bool shouldLog = (currentHeight != lastStaleLogHeight);
+            if (shouldLog) {
+                lastStaleLogHeight = currentHeight;
+            }
+            pthread_mutex_unlock(&_mutex);
+
+            if (shouldLog) {
+                logFormattedWrite(_log, "Block submission failed: stale work (height %lu)", currentHeight);
+            }
+
+            // Request new work directly (we're in lws thread)
             json_decref(root);
-            triggerRefresh();
+
+            pthread_mutex_lock(&_mutex);
+            _needsRefresh = true;
+            struct lws* wsi = _wsi;
+            pthread_mutex_unlock(&_mutex);
+
+            if (wsi) {
+                lws_callback_on_writable(wsi);  // Safe - we're in lws thread
+            }
             return;
         }
 
+        // For other errors, log normally
+        logFormattedWrite(_log, "Block submission failed: %s", msg);
         json_decref(root);
         return;
     }
@@ -163,6 +274,14 @@ void GetWorkContext::onMessage(const char* data, size_t len) {
         if (changed) {
             _workId++;
             _needsRefresh = false;  // Clear refresh flag when we get new work
+
+            // Clear pending message queue - old submissions are for previous block
+            pthread_mutex_lock(&_queueMutex);
+            while (!_pendingMessages.empty()) {
+                _pendingMessages.pop();
+            }
+            pthread_mutex_unlock(&_queueMutex);
+
             logFormattedWrite(_log, "NEW WORK: height=%lu difficulty=%lu parent_hash=%s",
                             newWork.height, newWork.difficulty, newWork.parentHash.c_str());
         }
@@ -176,8 +295,8 @@ void GetWorkContext::onMessage(const char* data, size_t len) {
     json_decref(root);
 }
 
-// Send getwork request
-void GetWorkContext::sendGetWork() {
+// Internal: Send getwork request (called from callback with valid wsi)
+void GetWorkContext::sendGetWorkInternal(struct lws* wsi) {
     pthread_mutex_lock(&_mutex);
     int id = _rpcId++;
     pthread_mutex_unlock(&_mutex);
@@ -201,16 +320,6 @@ void GetWorkContext::sendGetWork() {
         return;
     }
 
-    pthread_mutex_lock(&_mutex);
-    struct lws* wsi = _wsi;
-    pthread_mutex_unlock(&_mutex);
-
-    if (!wsi) {
-        // Don't log error here - this is called from callback, disconnection is normal
-        free(requestStr);
-        return;
-    }
-
     unsigned char buf[LWS_PRE + 4096];
     size_t len = strlen(requestStr);
     if (len == 0 || len >= 4096) {
@@ -227,6 +336,20 @@ void GetWorkContext::sendGetWork() {
     }
 
     free(requestStr);
+}
+
+// Public: Trigger a getwork request
+void GetWorkContext::sendGetWork() {
+    pthread_mutex_lock(&_mutex);
+    bool shouldSend = (_wsi != nullptr);
+    if (shouldSend) {
+        _hasPendingWrites = true;  // Signal pending write
+    }
+    pthread_mutex_unlock(&_mutex);
+
+    if (shouldSend) {
+        lws_cancel_service(_wsContext);  // Thread-safe wake up
+    }
 }
 
 #endif // HAVE_LIBWEBSOCKETS
@@ -290,7 +413,19 @@ void* GetWorkContext::runThread(void* arg) {
             pthread_mutex_lock(&ctx->_mutex);
             bool connected = ctx->_connected;
             struct lws* wsi = ctx->_wsi;
+            time_t lastMsg = ctx->_lastMessageTime;
             pthread_mutex_unlock(&ctx->_mutex);
+
+            // Check for timeout (no messages for 30 seconds)
+            if (connected && (now - lastMsg) > 30) {
+                logFormattedWrite(ctx->_log, "Connection timeout - no messages for %ld seconds", now - lastMsg);
+                pthread_mutex_lock(&ctx->_mutex);
+                ctx->_connected = false;
+                ctx->_hasWork = false;
+                ctx->_workId++;
+                pthread_mutex_unlock(&ctx->_mutex);
+                connected = false;  // Fall through to reconnect logic
+            }
 
             if (connected && wsi) {
                 // Connected: request new work
@@ -316,9 +451,10 @@ GetWorkContext::GetWorkContext(void* log, const char* wsUrl) :
 #ifdef HAVE_LIBWEBSOCKETS
     _wsContext(nullptr), _wsi(nullptr),
 #endif
-    _workId(0), _connected(false), _hasWork(false), _needsRefresh(false), _rpcId(1)
+    _workId(0), _connected(false), _hasWork(false), _needsRefresh(false), _hasPendingWrites(false), _lastMessageTime(time(0)), _rpcId(1)
 {
     pthread_mutex_init(&_mutex, 0);
+    pthread_mutex_init(&_queueMutex, 0);
 
 #ifdef HAVE_LIBWEBSOCKETS
     logFormattedWrite(_log, "Initializing WebSocket connection to %s", wsUrl);
@@ -395,6 +531,7 @@ GetWorkContext::~GetWorkContext() {
     }
 #endif
     pthread_mutex_destroy(&_mutex);
+    pthread_mutex_destroy(&_queueMutex);
 }
 
 // Start background thread
@@ -439,6 +576,14 @@ double GetWorkContext::getDifficulty() {
     return d;
 }
 
+// Get work ID (changes when block changes)
+uint64_t GetWorkContext::getWorkId() {
+    pthread_mutex_lock(&_mutex);
+    uint64_t id = _workId;
+    pthread_mutex_unlock(&_mutex);
+    return id;
+}
+
 // Check if connected
 bool GetWorkContext::isConnected() {
     pthread_mutex_lock(&_mutex);
@@ -452,11 +597,13 @@ void GetWorkContext::requestWork() {
 #ifdef HAVE_LIBWEBSOCKETS
     pthread_mutex_lock(&_mutex);
     bool shouldRequest = (_connected && _wsi != nullptr);
-    struct lws* wsi = _wsi;
+    if (shouldRequest) {
+        _hasPendingWrites = true;  // Signal pending work request
+    }
     pthread_mutex_unlock(&_mutex);
 
-    if (shouldRequest && wsi) {
-        lws_callback_on_writable(wsi);
+    if (shouldRequest) {
+        lws_cancel_service(_wsContext);  // Thread-safe wake up
     }
 #endif
 }
@@ -557,25 +704,27 @@ bool GetWorkContext::submitWork(const JsonWork& work, uint32_t nonce,
         return false;
     }
 
-    pthread_mutex_lock(&_mutex);
-    struct lws* wsi = _wsi;
-    pthread_mutex_unlock(&_mutex);
-
-    if (!wsi) {
-        free(requestStr);
-        logFormattedWrite(_log, "Cannot submit work: WebSocket disconnected");
-        return false;
+    // Queue the message instead of writing directly (thread-safe)
+    pthread_mutex_lock(&_queueMutex);
+    // Limit queue size to prevent unbounded growth (keep only last 3 messages)
+    while (_pendingMessages.size() >= 3) {
+        _pendingMessages.pop();  // Drop oldest message
     }
-
-    unsigned char buf[LWS_PRE + 4096];
-    size_t len = strlen(requestStr);
-    memcpy(&buf[LWS_PRE], requestStr, len);
-
-    lws_write(wsi, &buf[LWS_PRE], len, LWS_WRITE_TEXT);
+    _pendingMessages.push(std::string(requestStr));
+    pthread_mutex_unlock(&_queueMutex);
     free(requestStr);
 
+    // Set flag and wake up event loop (thread-safe way)
+    pthread_mutex_lock(&_mutex);
+    _hasPendingWrites = true;
+    pthread_mutex_unlock(&_mutex);
+
+    // lws_cancel_service is the ONLY thread-safe lws call
+    // This will trigger LWS_CALLBACK_EVENT_WAIT_CANCELLED in the lws thread
+    lws_cancel_service(_wsContext);
+
     // Already logged as "found share" in main mining code
-    return true;
+    return true;  // Message queued successfully
 #else
     logFormattedWrite(_log, "ERROR: submitWork requires libwebsockets");
     return false;
