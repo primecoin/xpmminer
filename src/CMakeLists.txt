@@ -1,4 +1,5 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.5)
+project(xpmminer LANGUAGES C CXX)
 
 option(DEBUG_MINING_AMD_OPENCL "Print performance counters")
 option(BUILDCPUMINER "build CPU miner" ON)
