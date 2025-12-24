@@ -1,52 +1,36 @@
 {
-  description = "xpmminer nixos builder with cmake";
+  description = "xpmminer development environment (Pinned to NixOS 25.05)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
-    flake-utils.url = "github:numtide/flake-utils";
+    # 1. Source: Explicitly pin to the NixOS 25.05 branch
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    
+    # 2. Import Devenv
+    devenv.url = "github:cachix/devenv";
+    
+    # 3. Critical: Force Devenv to use our pinned nixpkgs (25.05)
+    # This prevents Devenv from pulling its own 'rolling' version of packages.
+    devenv.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
+  outputs = { self, nixpkgs, devenv, ... } @ inputs:
+    let
+      system = "x86_64-linux";
+    in
+    {
+      devShells.${system}.default = let
         pkgs = import nixpkgs {
           inherit system;
+          # Global configuration to allow unfree packages (Required for CUDA)
+          config.allowUnfree = true;
         };
-        ncurses = pkgs.ncurses;
-        cmake = pkgs.cmake;
-        curl = pkgs.curl;
-        jansson = pkgs.jansson;
-        openssl = pkgs.openssl;
-        gmp = pkgs.gmp5;
-        gcc = pkgs.gcc;
-        gnumake = pkgs.gnumake;
-      in {
-        devShell = pkgs.mkShell {
-          buildInputs = [ ncurses cmake curl jansson openssl gmp gcc gnumake ];
-          shellHook = ''
-            echo "xpmminer nixos builder with cmake ready!"
-          '';
-        };
-
-        packages.default = pkgs.stdenv.mkDerivation {
-          name = "xpmminer-nixos-builder-with-cmake";
-          src = ./src;
-          nativeBuildInputs = [ cmake ];
-          buildInputs = [ ncurses curl jansson openssl gmp gcc gnumake ];
-          
-          cmakeFlags = [
-            "-DCMAKE_BUILD_TYPE=Release"
-            "-DBUILDOPENCLMINER=OFF"
-            "-DBUILDCUDAMINER=OFF"
-          ];
-
-          enableParallelBuilding = true;
-          
-          installPhase = ''
-            mkdir -p $out
-            cp -r * $out/
-          '';
-        };
-      }
-    );
+      in devenv.lib.mkShell {
+        inherit inputs pkgs;
+        
+        # Load the configuration from devenv.nix
+        modules = [
+          ./devenv.nix
+        ];
+      };
+    };
 }
