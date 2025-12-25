@@ -36,8 +36,8 @@
   };
 
   # 3. Helper scripts (One-click commands)
-  # Usage: just run 'config-miner' in the shell to configure the project
-  scripts.config-miner.exec = ''
+  # Usage: just run 'build-miner' in the shell to start compiling
+  scripts.build-miner.exec = ''
     echo "⚙️  Auto-configuring project (CUDA + HIP)..."
     cmake -S src -B build \
       -DCMAKE_BUILD_TYPE=Release \
@@ -46,11 +46,6 @@
       -DBUILDOPENCLMINER=OFF \
       -DCUDA_DRIVER_LIBRARY=$CUDA_STUB_LIB \
       -DHIP_ROOT_DIR=$HIP_ROOT_DIR
-    echo "✅ Configuration complete! Run 'build-miner' to compile."
-  '';
-
-  # Usage: just run 'build-miner' in the shell to start compiling
-  scripts.build-miner.exec = ''
     echo "🔨 Starting multi-core build..."
     cmake --build build -j$(nproc)
   '';
@@ -69,8 +64,7 @@
     echo "   HIP Root : $HIP_ROOT_DIR"
     echo ""
     echo "💡 Usage:"
-    echo "   1. Run 'config-miner' -> Auto-execute cmake configuration"
-    echo "   2. Run 'build-miner'  -> Auto-start compilation"
+    echo " Run 'build-miner'  -> Auto-start compilation"
   '';
   
   git-hooks.excludes = [ ".devenv" ];
