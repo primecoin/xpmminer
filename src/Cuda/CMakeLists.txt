@@ -66,6 +66,11 @@ include_directories(
   ${CMAKE_BINARY_DIR}
 )
 
+if (Libwebsockets_FOUND)
+  include_directories(${LIBWEBSOCKETS_INCLUDE_DIRS})
+  add_definitions(-DHAVE_LIBWEBSOCKETS)
+endif()
+
 add_executable(xpmcuda
     xpmclient.cpp
     benchmarks.cpp
@@ -95,6 +100,10 @@ if (${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.17.0" AND CUDAToolkit_FOUND)
     CUDA::cuda_driver
     CUDA::nvrtc
   )
+
+  if (Libwebsockets_FOUND)
+    target_link_libraries(xpmcuda ${LIBWEBSOCKETS_LIBRARIES})
+  endif()
 else()
   # Legacy FindCUDA
   find_library(CUDA_DRIVER_LIBRARY cuda
@@ -124,6 +133,10 @@ else()
     ${CUDA_DRIVER_LIBRARY}
     ${CUDA_nvrtc_LIBRARY}
   )
+
+  if (Libwebsockets_FOUND)
+    target_link_libraries(xpmcuda ${LIBWEBSOCKETS_LIBRARIES})
+  endif()
 endif()
 
 # Post-build: Auto-copy kernel files to build directory

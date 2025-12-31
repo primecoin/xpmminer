@@ -1,11 +1,12 @@
-cmake_minimum_required(VERSION 3.5)
-project(xpmminer LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.16)
+project(xpmminer)
 
 option(DEBUG_MINING_AMD_OPENCL "Print performance counters")
 option(BUILDCPUMINER "build CPU miner" ON)
 option(BUILDOPENCLMINER "build OpenCL miner" ON)
 option(BUILDCUDAMINER "build CUDA miner" ON)
 option(BUILDHIPMINER "build HIP miner (for AMD GPUs via ROCm)" ON)
+option(BUILDMETALMINER "build Metal miner (for Apple Silicon)" ON)
 
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
         ${CMAKE_SOURCE_DIR}/cmake
@@ -82,4 +83,7 @@ IF (BUILDCUDAMINER)
 ENDIF()
 IF (BUILDHIPMINER)
   add_subdirectory(Hip)
+ENDIF()
+IF (BUILDMETALMINER AND APPLE)
+  add_subdirectory(Metal)
 ENDIF()

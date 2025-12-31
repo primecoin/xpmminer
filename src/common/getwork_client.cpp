@@ -49,7 +49,29 @@ int GetWorkContext::wsCallback(struct lws* wsi, enum lws_callback_reasons reason
             break;
 
         case LWS_CALLBACK_CLIENT_WRITEABLE:
-            // Process pending messages from the queue first
+        {
+            // PRIORITY 1: Check for high-priority getwork request first
+            pthread_mutex_lock(&ctx->_mutex);
+            bool needsGetwork = ctx->_pendingGetwork;
+            if (needsGetwork) {
+                ctx->_pendingGetwork = false;  // Clear flag
+            }
+            pthread_mutex_unlock(&ctx->_mutex);
+
+            if (needsGetwork) {
+                // Send getwork immediately (bypasses submit queue)
+                ctx->sendGetWorkInternal(wsi);
+                // Check if there are still pending submits to process
+                pthread_mutex_lock(&ctx->_queueMutex);
+                bool hasSubmits = !ctx->_pendingMessages.empty();
+                pthread_mutex_unlock(&ctx->_queueMutex);
+                if (hasSubmits) {
+                    lws_callback_on_writable(wsi);  // Schedule next write for submits
+                }
+                break;
+            }
+
+            // PRIORITY 2: Process pending submit messages from the queue
             pthread_mutex_lock(&ctx->_queueMutex);
             if (!ctx->_pendingMessages.empty()) {
                 std::string msg = ctx->_pendingMessages.front();
@@ -75,6 +97,7 @@ int GetWorkContext::wsCallback(struct lws* wsi, enum lws_callback_reasons reason
                 ctx->sendGetWorkInternal(wsi);
             }
             break;
+        }
 
         case LWS_CALLBACK_EVENT_WAIT_CANCELLED:
             // Called when lws_cancel_service() wakes us up from another thread
@@ -220,10 +243,20 @@ void GetWorkContext::onMessage(const char* data, size_t len) {
                 logFormattedWrite(_log, "Block submission failed: stale work (height %lu)", currentHeight);
             }
 
+            // Clear pending message queue - all pending submissions are stale
+            pthread_mutex_lock(&_queueMutex);
+            while (!_pendingMessages.empty()) {
+                _pendingMessages.pop();
+            }
+            pthread_mutex_unlock(&_queueMutex);
+
             // Request new work directly (we're in lws thread)
             json_decref(root);
 
             pthread_mutex_lock(&_mutex);
+            // Stop mining until new work arrives
+            _hasWork = false;
+            _workId++;
             _needsRefresh = true;
             struct lws* wsi = _wsi;
             pthread_mutex_unlock(&_mutex);
@@ -344,6 +377,7 @@ void GetWorkContext::sendGetWork() {
     bool shouldSend = (_wsi != nullptr);
     if (shouldSend) {
         _hasPendingWrites = true;  // Signal pending write
+        _pendingGetwork = true;    // Mark as high-priority getwork request
     }
     pthread_mutex_unlock(&_mutex);
 
@@ -451,7 +485,7 @@ GetWorkContext::GetWorkContext(void* log, const char* wsUrl) :
 #ifdef HAVE_LIBWEBSOCKETS
     _wsContext(nullptr), _wsi(nullptr),
 #endif
-    _workId(0), _connected(false), _hasWork(false), _needsRefresh(false), _hasPendingWrites(false), _lastMessageTime(time(0)), _rpcId(1)
+    _workId(0), _connected(false), _hasWork(false), _needsRefresh(false), _hasPendingWrites(false), _pendingGetwork(false), _lastMessageTime(time(0)), _lastSubmitTime(0), _rpcId(1)
 {
     pthread_mutex_init(&_mutex, 0);
     pthread_mutex_init(&_queueMutex, 0);
@@ -599,6 +633,7 @@ void GetWorkContext::requestWork() {
     bool shouldRequest = (_connected && _wsi != nullptr);
     if (shouldRequest) {
         _hasPendingWrites = true;  // Signal pending work request
+        _pendingGetwork = true;    // Mark as high-priority getwork request
     }
     pthread_mutex_unlock(&_mutex);
 
@@ -671,9 +706,18 @@ bool GetWorkContext::waitForNewWork(const JsonWork& oldWork, int timeoutMs) {
 bool GetWorkContext::submitWork(const JsonWork& work, uint32_t nonce,
                                 const mpz_class& multiplier) {
 #ifdef HAVE_LIBWEBSOCKETS
+    // Check if work is stale BEFORE queuing
     pthread_mutex_lock(&_mutex);
+    bool isStale = !_hasWork ||  // No valid work available
+                   (work.height != _currentWork.height ||
+                    work.parentHash != _currentWork.parentHash);
     int id = _rpcId++;
     pthread_mutex_unlock(&_mutex);
+
+    if (isStale) {
+        // Silently drop stale submission - work already changed
+        return false;
+    }
 
     json_t* request = json_object();
     json_object_set_new(request, "jsonrpc", json_string("2.0"));
@@ -706,9 +750,10 @@ bool GetWorkContext::submitWork(const JsonWork& work, uint32_t nonce,
 
     // Queue the message instead of writing directly (thread-safe)
     pthread_mutex_lock(&_queueMutex);
-    // Limit queue size to prevent unbounded growth (keep only last 3 messages)
-    while (_pendingMessages.size() >= 3) {
-        _pendingMessages.pop();  // Drop oldest message
+    // Limit queue size to 1 to prioritize getwork requests
+    // When shares are found rapidly, we only keep the most recent submit
+    while (_pendingMessages.size() >= 1) {
+        _pendingMessages.pop();  // Drop oldest submit to make room for new one
     }
     _pendingMessages.push(std::string(requestStr));
     pthread_mutex_unlock(&_queueMutex);

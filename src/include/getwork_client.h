@@ -43,7 +43,9 @@ private:
     bool _hasWork;
     bool _needsRefresh;           // Flag to force work refresh
     bool _hasPendingWrites;       // Flag to signal pending writes (thread-safe)
+    bool _pendingGetwork;         // Flag for high-priority getwork request
     time_t _lastMessageTime;      // Track last received message for timeout detection
+    time_t _lastSubmitTime;       // Track last submit time for throttling
 
     // JSON-RPC request ID counter
     int _rpcId;
