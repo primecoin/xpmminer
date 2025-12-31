@@ -40,6 +40,9 @@ static const char* gTestJsonFile = nullptr;
 static uint64_t gTestNonce = 0;
 static bool gTestMode = false;
 
+// Experimental: Submit all chain types (Cunningham1, Cunningham2, BiTwin) instead of just BiTwin
+static bool gSubmitAllChains = false;
+
 //=============================================================================
 // Test Mode Helper Functions (forward declarations and implementations)
 //=============================================================================
@@ -2015,8 +2018,14 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                         bool submitted = false;
 
-                        // Submit work via getwork protocol - ONLY BiTwin chains (type 3) - matches HIP line 1519-1532
-                        if (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) {
+                        // Submit work via getwork protocol
+                        // Default: ONLY BiTwin chains (type 3)
+                        // Experimental: With --submit-all-chains flag, also submit Cunningham1 and Cunningham2
+                        bool shouldSubmit = (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) ||
+                                          (gSubmitAllChains && (testParams.nCandidateType == PRIME_CHAIN_CUNNINGHAM1 ||
+                                                               testParams.nCandidateType == PRIME_CHAIN_CUNNINGHAM2));
+
+                        if (shouldSubmit) {
                             // Check if work has changed before submitting (prevent stale submissions)
                             if (ctx->getWorkId() != roundWorkId) {
                                 LOG_F(INFO, "GPU %d: Skipping stale submission (work changed)", mID);
@@ -2041,8 +2050,16 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                         // Log share found for ALL chains (matches HIP format at line 1534-1537)
                         std::string chainName = GetPrimeChainName(testParams.nCandidateType, testParams.nChainLength);
-                        const char* submitStatus = (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) ?
-                                                   (submitted ? "yes" : "failed") : "skipped (not BiTwin)";
+                        const char* submitStatus;
+                        if (shouldSubmit) {
+                            submitStatus = submitted ? "yes" : "failed";
+                        } else {
+                            if (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) {
+                                submitStatus = "skipped (BiTwin but shouldn't happen)";
+                            } else {
+                                submitStatus = gSubmitAllChains ? "skipped (unknown type)" : "skipped (not BiTwin, use --submit-all-chains)";
+                            }
+                        }
                         LOG_F(1, "GPU %d found share: %s (submitted: %s)", mID, chainName.c_str(), submitStatus);
 
                         // Log block found for ALL chains (matches HIP format at line 1539-1544)
@@ -2185,12 +2202,13 @@ int main(int argc, char** argv) {
         {"test-dump", required_argument, 0, 'D'},
         {"test-json", required_argument, 0, 'J'},
         {"test-nonce", required_argument, 0, 'N'},
+        {"submit-all-chains", no_argument, 0, 'A'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
     int c;
-    while ((c = getopt_long(argc, argv, "u:dp:s:w:e:P:bh", longOptions, nullptr)) != -1) {
+    while ((c = getopt_long(argc, argv, "u:dp:s:w:e:P:bAh", longOptions, nullptr)) != -1) {
         switch (c) {
             case 'u': gWsUrl = optarg; break;
             case 'd': gDebug = 1; break;
@@ -2200,6 +2218,7 @@ int main(int argc, char** argv) {
             case 'e': gExtensionsNum = atoi(optarg); break;
             case 'P': gPrimeCount = atoi(optarg); break;
             case 'b': runBenchmark = true; break;
+            case 'A': gSubmitAllChains = true; break;
             case 'D':
                 gTestDumpDir = optarg;
                 gTestMode = true;
@@ -2222,6 +2241,8 @@ int main(int argc, char** argv) {
                 printf("  -P, --prime-count <n>       Prime count for sieving (default: 16384)\n");
                 printf("                              Try: 8192, 16384, 32768, or 65536\n");
                 printf("  -b, --benchmark             Run performance benchmarks to measure GPU speed\n");
+                printf("  -A, --submit-all-chains     [EXPERIMENTAL] Submit all chain types (Cunningham1,\n");
+                printf("                              Cunningham2, BiTwin) instead of only BiTwin chains\n");
                 printf("      --test-dump <dir>       Enable test mode, dump checkpoints to <dir>\n");
                 printf("      --test-json <file>      Load test JSON work from <file>\n");
                 printf("      --test-nonce <n>        Starting nonce for test mode (default: 0)\n");
@@ -2282,6 +2303,13 @@ int main(int argc, char** argv) {
         }
 
         LOG_F(INFO, "Prime tables generated");
+
+        // Log experimental feature status
+        if (gSubmitAllChains) {
+            LOG_F(WARNING, "[EXPERIMENTAL] Submit all chains enabled: BiTwin, Cunningham1, Cunningham2 will be submitted");
+        } else {
+            LOG_F(INFO, "Submit mode: BiTwin chains only (use --submit-all-chains for experimental mode)");
+        }
 
         // If test mode, set up dump directory and load test work
         if (gTestMode) {

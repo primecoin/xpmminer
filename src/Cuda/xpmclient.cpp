@@ -44,6 +44,10 @@ int gWeaveDepth = 8192;
 int gThreadsNum = 1;
 int extraNonce = 0;
 
+// Experimental: Submit all chain types (Cunningham1, Cunningham2, BiTwin)
+// instead of just BiTwin
+static bool gSubmitAllChains = false;
+
 static const char* gWallet = 0;
 static const char* gUrl = "127.0.0.1:9912";
 static const char* gUserName = 0;
@@ -1860,7 +1864,20 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                     mpz_class targetMultiplier = hash.primorial * multi;
 
                     bool submitted = false;
-                    if (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) {
+
+                    // Submit work via getwork protocol
+                    // Default: ONLY BiTwin chains (type 3)
+                    // Experimental: With --submit-all-chains flag, also submit
+                    // Cunningham1 and Cunningham2
+                    bool shouldSubmit =
+                        (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) ||
+                        (gSubmitAllChains &&
+                         (testParams.nCandidateType ==
+                              PRIME_CHAIN_CUNNINGHAM1 ||
+                          testParams.nCandidateType ==
+                              PRIME_CHAIN_CUNNINGHAM2));
+
+                    if (shouldSubmit) {
                         // Check if work has changed before submitting
                         if (ctx->getWorkId() != roundWorkId) {
                             LOG_F(
@@ -1879,10 +1896,19 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                     std::string chainName = GetPrimeChainName(
                         testParams.nCandidateType, testParams.nChainLength);
-                    const char* submitStatus =
-                        (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN)
-                        ? (submitted ? "yes" : "failed")
-                        : "skipped (not BiTwin)";
+                    const char* submitStatus;
+                    if (shouldSubmit) {
+                        submitStatus = submitted ? "yes" : "failed";
+                    } else {
+                        if (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) {
+                            submitStatus =
+                                "skipped (BiTwin but shouldn't happen)";
+                        } else {
+                            submitStatus = gSubmitAllChains
+                                ? "skipped (unknown type)"
+                                : "skipped (not BiTwin, use --submit-all-chains)";
+                        }
+                    }
                     LOG_F(
                         1,
                         "GPU %d found share: %s (submitted: %s)",
@@ -1977,6 +2003,7 @@ enum CmdLineOptions {
     clWorkerId,
     clProtocol,
     clWsUrl,
+    clSubmitAllChains,
     clHelp,
     clOptionLast,
     clOptionsNum
@@ -1997,6 +2024,10 @@ void printHelpMessage() {
     printf(
         "  --protocol <getblocktemplate|getwork>: mining protocol (default: getblocktemplate)\n");
     printf("  --ws-url <ws://host:port>: WebSocket URL for getwork protocol\n");
+    printf(
+        "  --submit-all-chains: [EXPERIMENTAL] Submit all chain types (Cunningham1,\n");
+    printf(
+        "                       Cunningham2, BiTwin) instead of only BiTwin chains\n");
     printf(
         "  --extensions-num <number>: Eratosthenes sieve extensions number (default: %u)\n",
         gExtensionsNum);
@@ -2030,6 +2061,7 @@ void initCmdLineOptions(option* options) {
     options[clWorkerId] = {"worker-id", required_argument, &extraNonce, 0};
     options[clProtocol] = {"protocol", required_argument, 0, 0};
     options[clWsUrl] = {"ws-url", required_argument, 0, 0};
+    options[clSubmitAllChains] = {"submit-all-chains", no_argument, 0, 0};
     options[clHelp] = {"help", no_argument, 0, 'h'};
     options[clOptionLast] = {0, 0, 0, 0};
 }
@@ -2088,6 +2120,9 @@ int main(int argc, char** argv) {
                         break;
                     case clWsUrl:
                         gWsUrl = optarg;
+                        break;
+                    case clSubmitAllChains:
+                        gSubmitAllChains = true;
                         break;
                 }
                 break;
@@ -2149,6 +2184,17 @@ int main(int argc, char** argv) {
 
     printf("block sum is %d\n", gThreadsNum);
     printf("Using protocol: %s\n", gProtocol);
+
+    // Log experimental feature status
+    if (gSubmitAllChains) {
+        LOG_F(
+            WARNING,
+            "[EXPERIMENTAL] Submit all chains enabled: BiTwin, Cunningham1, Cunningham2 will be submitted");
+    } else {
+        LOG_F(
+            INFO,
+            "Submit mode: BiTwin chains only (use --submit-all-chains for experimental mode)");
+    }
 
     // Only initialize RPC contexts if NOT in benchmark mode
     GetBlockTemplateContext* getblock = nullptr;
@@ -2222,8 +2268,21 @@ int main(int argc, char** argv) {
             &info.minorComputeCapability,
             CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
             info.device));
+
+// CUDA 12.0+ uses new cuCtxCreate API
+// Signature: cuCtxCreate(CUcontext* pctx, CUctxCreateParams* ctxCreateParams,
+// unsigned int flags, CUdevice dev) For basic context creation, pass NULL for
+// ctxCreateParams
+#if CUDA_VERSION >= 13000
+        CUDA_SAFE_CALL(
+            cuCtxCreate(&info.context, NULL, CU_CTX_SCHED_AUTO, info.device));
+#else
+        // Legacy API: cuCtxCreate(CUcontext* pctx, unsigned int flags, CUdevice
+        // dev)
         CUDA_SAFE_CALL(
             cuCtxCreate(&info.context, CU_CTX_SCHED_AUTO, info.device));
+#endif
+
         CUDA_SAFE_CALL(cuDeviceGetName(name, sizeof(name), info.device));
         gpus.push_back(info);
         LOG_F(
