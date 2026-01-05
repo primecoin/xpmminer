@@ -10,231 +10,234 @@
 #ifndef XPMCLIENT_HIP_H_
 #define XPMCLIENT_HIP_H_
 
-
 #include <gmp.h>
 #include <gmpxx.h>
 #include "getblocktemplate.h"
 #include "hiputil.h"
-#include "uint256.h"
 #include "sha256.h"
 #include "system.h"
+#include "uint256.h"
 
 #define FERMAT_PIPELINES 2
 
-#define PW 512        // Pipeline width (number of hashes to store)
-#define SW 16         // maximum number of sieves in one iteration
-#define MSO 128*1024  // max sieve output
-#define MFS 2*SW*MSO  // max fermat size
+#define PW 512 // Pipeline width (number of hashes to store)
+#define SW 16 // maximum number of sieves in one iteration
+#define MSO 128 * 1024 // max sieve output
+#define MFS 2 * SW* MSO // max fermat size
 
 const unsigned maxHashPrimorial = 16;
 
-extern unsigned gPrimes[96*1024];
+extern unsigned gPrimes[96 * 1024];
 extern std::vector<unsigned> gPrimes2;
 
 struct stats_t {
+    unsigned id;
+    unsigned errors;
+    unsigned fps;
+    double primeprob;
+    double cpd;
 
-  unsigned id;
-  unsigned errors;
-  unsigned fps;
-  double primeprob;
-  double cpd;
-
-  stats_t(){
-    id = 0;
-    errors = 0;
-    fps = 0;
-    primeprob = 0;
-    cpd = 0;
-  }
-
+    stats_t() {
+        id = 0;
+        errors = 0;
+        fps = 0;
+        primeprob = 0;
+        cpd = 0;
+    }
 };
-
 
 struct config_t {
-
-  uint32_t N;
-  uint32_t SIZE;
-  uint32_t STRIPES;
-  uint32_t WIDTH;
-  uint32_t PCOUNT;
-  uint32_t TARGET;
-  uint32_t LIMIT13;
-  uint32_t LIMIT14;
-  uint32_t LIMIT15;
+    uint32_t N;
+    uint32_t SIZE;
+    uint32_t STRIPES;
+    uint32_t WIDTH;
+    uint32_t PCOUNT;
+    uint32_t TARGET;
+    uint32_t LIMIT13;
+    uint32_t LIMIT14;
+    uint32_t LIMIT15;
 };
-
 
 struct HIPDeviceInfo {
-  int index;
-  hipDevice_t device;
-  hipCtx_t context;
-  int majorComputeCapability;
-  int minorComputeCapability;
-  char gcnArchName[256];
+    int index;
+    hipDevice_t device;
+    hipCtx_t context;
+    int majorComputeCapability;
+    int minorComputeCapability;
+    char gcnArchName[256];
 };
 
+template <typename T>
+class lifoBuffer {
+   private:
+    T* _data;
+    size_t _size;
+    size_t _readPos;
+    size_t _writePos;
 
-template<typename T> class lifoBuffer {
-private:
-  T *_data;
-  size_t _size;
-  size_t _readPos;
-  size_t _writePos;
-
-  size_t nextPos(size_t pos) { return (pos+1) % _size; }
-
-public:
-  lifoBuffer(size_t size) : _size(size), _readPos(0), _writePos(0) {
-    _data = new T[size];
-  }
-
-  size_t readPos() const { return _readPos; }
-  size_t writePos() const { return _writePos; }
-  T *data() const { return _data; }
-  T& get(size_t index) const { return _data[index]; }
-
-  bool empty() const {
-    return _readPos == _writePos;
-  }
-
-  size_t remaining() const {
-    return _writePos >= _readPos ?
-    _writePos - _readPos :
-    _size - (_readPos - _writePos);
-  }
-
-  void clear() {
-    _readPos = _writePos;
-  }
-
-  size_t push(const T& element) {
-    size_t oldWritePos = _writePos;
-    size_t nextWritePos = nextPos(_writePos);
-    if (nextWritePos != _readPos) {
-      _data[_writePos] = element;
-      _writePos = nextWritePos;
+    size_t nextPos(size_t pos) {
+        return (pos + 1) % _size;
     }
 
-    return oldWritePos;
-  }
+   public:
+    lifoBuffer(size_t size) : _size(size), _readPos(0), _writePos(0) {
+        _data = new T[size];
+    }
 
-  size_t pop() {
-    size_t oldReadPos = _readPos;
-    if (!empty())
-      _readPos = nextPos(_readPos);
-    return oldReadPos;
-  }
+    size_t readPos() const {
+        return _readPos;
+    }
+    size_t writePos() const {
+        return _writePos;
+    }
+    T* data() const {
+        return _data;
+    }
+    T& get(size_t index) const {
+        return _data[index];
+    }
+
+    bool empty() const {
+        return _readPos == _writePos;
+    }
+
+    size_t remaining() const {
+        return _writePos >= _readPos ? _writePos - _readPos
+                                     : _size - (_readPos - _writePos);
+    }
+
+    void clear() {
+        _readPos = _writePos;
+    }
+
+    size_t push(const T& element) {
+        size_t oldWritePos = _writePos;
+        size_t nextWritePos = nextPos(_writePos);
+        if (nextWritePos != _readPos) {
+            _data[_writePos] = element;
+            _writePos = nextWritePos;
+        }
+
+        return oldWritePos;
+    }
+
+    size_t pop() {
+        size_t oldReadPos = _readPos;
+        if (!empty())
+            _readPos = nextPos(_readPos);
+        return oldReadPos;
+    }
 };
 
 class PrimeMiner {
-public:
+   public:
+    struct block_t {
+        static const int CURRENT_VERSION = 2;
 
-  struct block_t {
+        int version;
+        uint256 hashPrevBlock;
+        uint256 hashMerkleRoot;
+        unsigned int time;
+        unsigned int bits;
+        unsigned int nonce;
+    };
 
-    static const int CURRENT_VERSION = 2;
+    struct search_t {
+        hipBuffer<uint32_t> midstate;
+        hipBuffer<uint32_t> found;
+        hipBuffer<uint32_t> primorialBitField;
+        hipBuffer<uint32_t> count;
+    };
 
-    int version;
-    uint256 hashPrevBlock;
-    uint256 hashMerkleRoot;
-    unsigned int time;
-    unsigned int bits;
-    unsigned int nonce;
+    struct hash_t {
+        unsigned iter;
+        unsigned nonce;
+        unsigned time;
+        uint256 hash;
+        mpz_class shash;
+        mpz_class primorial;
+        unsigned primorialIdx;
+    };
 
-  };
+    struct fermat_t {
+        uint32_t index;
+        uint32_t hashid;
+        uint8_t origin;
+        uint8_t chainpos;
+        uint8_t type;
+        uint8_t reserved;
+    };
 
-  struct search_t {
+    struct info_t {
+        hipBuffer<fermat_t> info;
+        hipBuffer<uint32_t> count;
+    };
 
-    hipBuffer<uint32_t> midstate;
-    hipBuffer<uint32_t> found;
-    hipBuffer<uint32_t> primorialBitField;
-    hipBuffer<uint32_t> count;
+    struct pipeline_t {
+        unsigned current;
+        unsigned bsize;
+        hipBuffer<uint32_t> input;
+        hipBuffer<uint8_t> output;
+        info_t buffer[2];
+    };
 
+    PrimeMiner(
+        unsigned id,
+        unsigned threads,
+        unsigned sievePerRound,
+        unsigned depth,
+        unsigned LSize);
+    ~PrimeMiner();
 
-  };
+    bool Initialize(hipCtx_t context, hipDevice_t device, hipModule_t module);
 
-  struct hash_t {
+    config_t getConfig() {
+        return mConfig;
+    }
 
-    unsigned iter;
-    unsigned nonce;
-    unsigned time;
-    uint256 hash;
-    mpz_class shash;
-    mpz_class primorial;
-    unsigned primorialIdx;
-  };
+    bool MakeExit;
+    void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
 
-  struct fermat_t {
-    uint32_t index;
-    uint32_t hashid;
-    uint8_t origin;
-    uint8_t chainpos;
-    uint8_t type;
-    uint8_t reserved;
-  };
+   private:
+    void FermatInit(pipeline_t& fermat, unsigned mfs);
 
-  struct info_t {
-    hipBuffer<fermat_t> info;
-    hipBuffer<uint32_t> count;
-  };
+    void FermatDispatch(
+        pipeline_t& fermat,
+        hipBuffer<fermat_t> sieveBuffers[SW][FERMAT_PIPELINES][2],
+        hipBuffer<uint32_t> candidatesCountBuffers[SW][2],
+        unsigned pipelineIdx,
+        int ridx,
+        int widx,
+        uint64_t& testCount,
+        uint64_t& fermatCount,
+        hipFunction_t fermatKernel,
+        unsigned sievePerRound);
 
-  struct pipeline_t {
-    unsigned current;
-    unsigned bsize;
-    hipBuffer<uint32_t> input;
-    hipBuffer<uint8_t> output;
-    info_t buffer[2];
-  };
+    unsigned mID;
+    unsigned mThreads;
 
-  PrimeMiner(unsigned id, unsigned threads, unsigned sievePerRound, unsigned depth, unsigned LSize);
-  ~PrimeMiner();
+    config_t mConfig;
+    unsigned mSievePerRound;
+    unsigned mBlockSize;
+    uint32_t mDepth;
+    unsigned mLSize;
 
-  bool Initialize(hipCtx_t context, hipDevice_t device, hipModule_t module);
+    hipCtx_t _context;
+    hipStream_t mSieveStream;
+    hipStream_t mHMFermatStream;
 
-  config_t getConfig() { return mConfig; }
-
-  bool MakeExit;
-  void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
-
-private:
-  void FermatInit(pipeline_t &fermat, unsigned mfs);
-
-  void FermatDispatch(pipeline_t &fermat,
-                      hipBuffer<fermat_t>  sieveBuffers[SW][FERMAT_PIPELINES][2],
-                      hipBuffer<uint32_t> candidatesCountBuffers[SW][2],
-                      unsigned pipelineIdx,
-                      int ridx,
-                      int widx,
-                      uint64_t &testCount,
-                      uint64_t &fermatCount,
-                      hipFunction_t fermatKernel,
-                      unsigned sievePerRound);
-
-
-  unsigned mID;
-  unsigned mThreads;
-
-  config_t mConfig;
-  unsigned mSievePerRound;
-  unsigned mBlockSize;
-  uint32_t mDepth;
-  unsigned mLSize;
-
-  hipCtx_t _context;
-  hipStream_t mSieveStream;
-  hipStream_t mHMFermatStream;
-
-  hipFunction_t mHashMod;
-  hipFunction_t mSieveSetup;
-  hipFunction_t mSieve;
-  hipFunction_t mSieveSearch;
-  hipFunction_t mFermatSetup;
-  hipFunction_t mFermatKernel352;
-  hipFunction_t mFermatKernel320;
-  hipFunction_t mFermatCheck;
-  info_t final;
-  hipBuffer<uint32_t> hashBuf;
-  timeMark workBeginPoint;
-  ::MineContext mineCtx;
+    hipFunction_t mHashMod;
+    hipFunction_t mSieveSetup;
+    hipFunction_t mSieve;
+    hipFunction_t mSieveSearch;
+    hipFunction_t mFermatSetup;
+    hipFunction_t mFermatKernel352;
+    hipFunction_t mFermatKernel320;
+    hipFunction_t mFermatCheck;
+    info_t final;
+    hipBuffer<uint32_t> hashBuf;
+    timeMark workBeginPoint;
+    ::MineContext mineCtx;
 };
 
 #endif /* XPMCLIENT_HIP_H_ */
