@@ -2,6 +2,7 @@
 #include <memory>
 #include <vector>
 #include "Debug.h"
+#include "primecoin.h"
 
 #define __HOST__
 #include "fmt.h"
