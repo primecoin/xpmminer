@@ -8,23 +8,16 @@
 #ifndef PRIME_H_
 #define PRIME_H_
 
-
-
 #include <gmp.h>
 #include <gmpxx.h>
 #include "uint256.h"
-
-
 
 extern const unsigned int nFractionalBits;
 extern unsigned int nTargetInitialLength;
 extern unsigned int nTargetMinLength;
 
-
-
-class CPrimalityTestParamsCuda
-{
-public:
+class CPrimalityTestParamsCuda {
+   public:
     // GMP C++ variables
     mpz_class mpzHashFixedMult;
     mpz_class mpzChainOrigin;
@@ -45,38 +38,30 @@ public:
     // Results
     unsigned int nChainLength;
 
-    CPrimalityTestParamsCuda()
-    {
+    CPrimalityTestParamsCuda() {
         nBits = 0;
         nCandidateType = 0;
         nChainLength = 0;
     }
 };
 
-
 unsigned int TargetGetLength(unsigned int nBits);
 unsigned int TargetGetFractional(unsigned int nBits);
 std::string TargetToString(unsigned int nBits);
 
-
-inline void mpz_set_uint256(mpz_t r, uint256& u)
-{
-    mpz_import(r, 32 / sizeof(unsigned long), -1, sizeof(unsigned long), -1, 0, &u);
+inline void mpz_set_uint256(mpz_t r, uint256& u) {
+    mpz_import(
+        r, 32 / sizeof(unsigned long), -1, sizeof(unsigned long), -1, 0, &u);
 }
 
-bool ProbablePrimeChainTestFastCuda(const mpz_class& mpzPrimeChainOrigin, CPrimalityTestParamsCuda& testParams, int base);
-bool FermatProbablePrimalityTestFastCuda(const mpz_class& n, unsigned int& nLength, CPrimalityTestParamsCuda& testParams, bool fFastFail);
-
-
-
-
-
-
-
-
-
-
-
-
+bool ProbablePrimeChainTestFastCuda(
+    const mpz_class& mpzPrimeChainOrigin,
+    CPrimalityTestParamsCuda& testParams,
+    int base);
+bool FermatProbablePrimalityTestFastCuda(
+    const mpz_class& n,
+    unsigned int& nLength,
+    CPrimalityTestParamsCuda& testParams,
+    bool fFastFail);
 
 #endif /* PRIME_H_ */
