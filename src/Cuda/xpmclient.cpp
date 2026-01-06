@@ -384,16 +384,14 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
                     sieveBuffers[sieveIdx][pipelineIdx][instIdx].init(
                         MSO, true));
 
-            CUDA_SAFE_CALL(
-                candidatesCountBuffers[sieveIdx][instIdx].init(
-                    FERMAT_PIPELINES, false)); // CL_MEM_ALLOC_HOST_PTR
+            CUDA_SAFE_CALL(candidatesCountBuffers[sieveIdx][instIdx].init(
+                FERMAT_PIPELINES, false)); // CL_MEM_ALLOC_HOST_PTR
         }
     }
 
     for (int k = 0; k < 2; ++k) {
-        CUDA_SAFE_CALL(
-            sieveBuf[k].init(
-                mConfig.SIZE * mConfig.STRIPES / 2 * mConfig.WIDTH, true));
+        CUDA_SAFE_CALL(sieveBuf[k].init(
+            mConfig.SIZE * mConfig.STRIPES / 2 * mConfig.WIDTH, true));
         CUDA_SAFE_CALL(sieveOff[k].init(mConfig.PCOUNT * mConfig.WIDTH, true));
     }
 
