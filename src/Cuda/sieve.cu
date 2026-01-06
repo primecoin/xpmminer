@@ -49,19 +49,20 @@ __global__ void sieve(
         uint32_t pos = loffset & 0x7FFFFFFF;
 
         poff += 1u << nps;
-        pos += __umul24((uint32_t)(fentry * fiprime), prime);
+        // Use regular multiply - faster on modern GPUs (CC 2.0+)
+        pos += ((uint32_t)(fentry * fiprime) * prime);
         pos -= entry;
         pos += ((int)pos < 0 ? prime : 0);
 #if STRIPES > 256
         pos += ((int)pos < 0 ? prime : 0);
 #endif
-        pos += __umul24(lpoff, prime);
+        pos += (lpoff * prime);
 
         uint4 vpos = {
             pos,
-            pos + __umul24(var, prime),
-            pos + __umul24(var * 2, prime),
-            pos + __umul24(var * 3, prime)};
+            pos + (var * prime),
+            pos + (var * 2 * prime),
+            pos + (var * 3 * prime)};
 
         if (var * 4 >= 32) {
             uint32_t* s1 = &sieve[vpos.x >> 5];
@@ -138,7 +139,8 @@ __global__ void sieve(
         const float fiprime = __int_as_float(fiplifo[lpos]);
         uint32_t pos = olifo[lpos];
 
-        pos += __umul24((uint32_t)(fentry * fiprime), prime);
+        // Use regular multiply - faster on modern GPUs (CC 2.0+)
+        pos += ((uint32_t)(fentry * fiprime) * prime);
         pos -= entry;
         pos += ((int)pos < 0 ? prime : 0);
 
@@ -206,7 +208,8 @@ __global__ void sieve(
         const float fiprime = __int_as_float(fiplifo[lpos]);
         uint32_t pos = olifo[lpos];
 
-        pos += __umul24((uint32_t)(fentry * fiprime), prime);
+        // Use regular multiply - faster on modern GPUs (CC 2.0+)
+        pos += ((uint32_t)(fentry * fiprime) * prime);
         pos -= entry;
         pos += ((int)pos < 0 ? prime : 0);
 

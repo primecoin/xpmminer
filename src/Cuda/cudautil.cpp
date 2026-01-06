@@ -44,14 +44,22 @@ bool cudaCompileKernel(
         NVRTC_SAFE_CALL(nvrtcGetProgramLogSize(prog, &logSize));
         char* log = new char[logSize];
         NVRTC_SAFE_CALL(nvrtcGetProgramLog(prog, log));
-        delete[] log;
+
         if (compileResult != NVRTC_SUCCESS) {
             LOG_F(
                 ERROR,
                 "nvrtcCompileProgram error: %s",
                 nvrtcGetErrorString(compileResult));
+            LOG_F(ERROR, "Compilation log:\n%s", log);
+            delete[] log;
             return false;
         }
+
+        // Print log even on success if there are warnings
+        if (logSize > 1) {
+            LOG_F(INFO, "Compilation log:\n%s", log);
+        }
+        delete[] log;
 
         // Obtain PTX from the program.
         size_t ptxSize;
