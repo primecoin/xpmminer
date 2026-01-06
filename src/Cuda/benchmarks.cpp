@@ -945,9 +945,8 @@ void cudaSieveTestBenchmark(
     }
 
     for (int k = 0; k < 2; ++k) {
-        CUDA_SAFE_CALL(
-            sieveBuf[k].init(
-                mConfig.SIZE * mConfig.STRIPES / 2 * mConfig.WIDTH, false));
+        CUDA_SAFE_CALL(sieveBuf[k].init(
+            mConfig.SIZE * mConfig.STRIPES / 2 * mConfig.WIDTH, false));
         CUDA_SAFE_CALL(sieveOff[k].init(mConfig.PCOUNT * mConfig.WIDTH, false));
     }
 

@@ -600,8 +600,9 @@ void SHA256_fresh(
 }
 
 void sha256SwapByteOrder(uint4* data) {
-    *data = (uint4){EndianSwap((*data).x),
-                    EndianSwap((*data).y),
-                    EndianSwap((*data).z),
-                    EndianSwap((*data).w)};
+    *data = (uint4){
+        EndianSwap((*data).x),
+        EndianSwap((*data).y),
+        EndianSwap((*data).z),
+        EndianSwap((*data).w)};
 }
