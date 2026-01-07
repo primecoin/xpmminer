@@ -1283,7 +1283,8 @@ int main(int argc, char** argv) {
         CUDA_SAFE_CALL(cuCtxSetCurrent(gpus[i].context));
         if (!cudaCompileKernel(
                 kernelname,
-                {"xpm/cuda/config.cu",
+                {"xpm/cuda/helpers.cu",
+                 "xpm/cuda/config.cu",
                  "xpm/cuda/procs.cu",
                  "xpm/cuda/fermat.cu",
                  "xpm/cuda/sieve.cu",
