@@ -11,7 +11,7 @@ struct JsonWork {
     uint64_t height;
     uint64_t difficulty;
     std::string merkle;        // transactions_root hex
-    uint32_t nonce;
+    uint64_t nonce;
 
     // For tracking work changes
     bool isValid() const { return !parentHash.empty(); }

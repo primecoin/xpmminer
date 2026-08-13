@@ -208,6 +208,7 @@ void GetWorkContext::onMessage(const char* data, size_t len) {
 
     // Check if this is a submit response (result is boolean true)
     if (json_is_boolean(result) && json_is_true(result)) {
+        logFormattedWrite(_log, "Block submission accepted");
         json_decref(root);
 
         // We're already in lws thread, so directly request new work
@@ -240,7 +241,9 @@ void GetWorkContext::onMessage(const char* data, size_t len) {
             pthread_mutex_unlock(&_mutex);
 
             if (shouldLog) {
-                logFormattedWrite(_log, "Block submission failed: stale work (height %lu)", currentHeight);
+                logFormattedWrite(_log,
+                                  "Block submission became stale after work advanced (height %lu)",
+                                  currentHeight);
             }
 
             // Clear pending message queue - all pending submissions are stale
@@ -703,7 +706,7 @@ bool GetWorkContext::waitForNewWork(const JsonWork& oldWork, int timeoutMs) {
 }
 
 // Submit work
-bool GetWorkContext::submitWork(const JsonWork& work, uint32_t nonce,
+bool GetWorkContext::submitWork(const JsonWork& work, uint64_t nonce,
                                 const mpz_class& multiplier) {
 #ifdef HAVE_LIBWEBSOCKETS
     // Check if work is stale BEFORE queuing

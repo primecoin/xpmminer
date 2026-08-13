@@ -71,19 +71,20 @@ kernel void setup_sieve(
  *
  * Ported from sieve_hip.cpp with full logic
  */
-kernel void sieve(
-    device uint* gsieve_all         [[buffer(0)]],
-    device uint* offset_all         [[buffer(1)]],
-    constant uint2* primes          [[buffer(2)]],
-    constant uint& SIZE             [[buffer(3)]],
-    constant uint& STRIPES          [[buffer(4)]],
-    constant uint& PCOUNT           [[buffer(5)]],
-    constant uint& SIEVERANGE1      [[buffer(6)]],
-    constant uint& SIEVERANGE2      [[buffer(7)]],
-    constant uint& SIEVERANGE3      [[buffer(8)]],
-    constant uint& SCOUNT           [[buffer(9)]],
-    uint tid [[thread_position_in_threadgroup]],
-    uint gid [[threadgroup_position_in_grid]])
+inline void sieve_impl(
+    device uint* gsieve_all,
+    device uint* offset_all,
+    constant uint2* primes,
+    constant uint& SIZE,
+    constant uint& STRIPES,
+    constant uint& PCOUNT,
+    constant uint& SIEVERANGE1,
+    constant uint& SIEVERANGE2,
+    constant uint& SIEVERANGE3,
+    constant uint& SCOUNT,
+    threadgroup uint* sieve_local,
+    uint tid,
+    uint gid)
 {
     // Calculate 2D indices from flattened threadgroup grid
     // gid is the threadgroup index (0 to (STRIPES/2)*WIDTH - 1)
@@ -97,9 +98,6 @@ kernel void sieve(
     const float fentry = float(entry);  // Convert value to float, NOT reinterpret bits
 
     device uint* offset = &offset_all[PCOUNT * line];
-
-    // Use threadgroup (shared) memory for fast sieving
-    threadgroup uint sieve_local[METAL_SIEVE_SIZE];
 
     // Initialize threadgroup sieve to zeros
     for (uint i = id; i < SIZE; i += LSIZE) {
@@ -128,9 +126,8 @@ kernel void sieve(
         pos += ((uint)(fentry * fiprime) * prime);
         pos -= entry;
         pos += ((int)pos < 0 ? prime : 0);
-#if STRIPES > 256
-        pos += ((int)pos < 0 ? prime : 0);
-#endif
+        if (STRIPES > 256)
+            pos += ((int)pos < 0 ? prime : 0);
         pos += (lpoff * prime);
 
         uint4 vpos = {pos,
@@ -308,6 +305,46 @@ kernel void sieve(
     for (uint i = id; i < SIZE; i += LSIZE) {
         gsieve[i] = sieve_local[i];
     }
+}
+
+kernel void sieve(
+    device uint* gsieve_all         [[buffer(0)]],
+    device uint* offset_all         [[buffer(1)]],
+    constant uint2* primes          [[buffer(2)]],
+    constant uint& SIZE             [[buffer(3)]],
+    constant uint& STRIPES          [[buffer(4)]],
+    constant uint& PCOUNT           [[buffer(5)]],
+    constant uint& SIEVERANGE1      [[buffer(6)]],
+    constant uint& SIEVERANGE2      [[buffer(7)]],
+    constant uint& SIEVERANGE3      [[buffer(8)]],
+    constant uint& SCOUNT           [[buffer(9)]],
+    uint tid [[thread_position_in_threadgroup]],
+    uint gid [[threadgroup_position_in_grid]])
+{
+    threadgroup uint sieve_local[METAL_SIEVE_SIZE];
+    sieve_impl(gsieve_all, offset_all, primes, SIZE, STRIPES, PCOUNT,
+               SIEVERANGE1, SIEVERANGE2, SIEVERANGE3, SCOUNT,
+               sieve_local, tid, gid);
+}
+
+kernel void sieve_dynamic(
+    device uint* gsieve_all         [[buffer(0)]],
+    device uint* offset_all         [[buffer(1)]],
+    constant uint2* primes          [[buffer(2)]],
+    constant uint& SIZE             [[buffer(3)]],
+    constant uint& STRIPES          [[buffer(4)]],
+    constant uint& PCOUNT           [[buffer(5)]],
+    constant uint& SIEVERANGE1      [[buffer(6)]],
+    constant uint& SIEVERANGE2      [[buffer(7)]],
+    constant uint& SIEVERANGE3      [[buffer(8)]],
+    constant uint& SCOUNT           [[buffer(9)]],
+    threadgroup uint* sieve_local   [[threadgroup(0)]],
+    uint tid [[thread_position_in_threadgroup]],
+    uint gid [[threadgroup_position_in_grid]])
+{
+    sieve_impl(gsieve_all, offset_all, primes, SIZE, STRIPES, PCOUNT,
+               SIEVERANGE1, SIEVERANGE2, SIEVERANGE3, SCOUNT,
+               sieve_local, tid, gid);
 }
 
 /*

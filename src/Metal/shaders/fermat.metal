@@ -407,6 +407,50 @@ kernel void check_fermat(
     }
 }
 
+// Metal-specific candidate compaction. Each SIMD group reserves output space
+// with at most one global atomic per destination instead of one atomic per
+// passing candidate.
+kernel void check_fermat_simd(
+    device fermat_t* info_out        [[buffer(0)]],
+    device atomic_uint* count        [[buffer(1)]],
+    device fermat_t* info_fin_out    [[buffer(2)]],
+    device atomic_uint* count_fin    [[buffer(3)]],
+    constant uchar* results          [[buffer(4)]],
+    constant fermat_t* info_in       [[buffer(5)]],
+    constant uint& depth             [[buffer(6)]],
+    uint tid [[thread_position_in_grid]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    fermat_t info = info_in[tid];
+    info.chainpos++;
+
+    uint passed = results[tid] == 1 ? 1u : 0u;
+    uint continuing = passed && info.chainpos < depth ? 1u : 0u;
+    uint finished = passed && info.chainpos >= depth ? 1u : 0u;
+
+    uint continuingOffset = simd_prefix_exclusive_sum(continuing);
+    uint continuingTotal = simd_sum(continuing);
+    uint continuingBase = 0;
+    if (lane == 0 && continuingTotal != 0) {
+        continuingBase = atomic_fetch_add_explicit(count, continuingTotal, memory_order_relaxed);
+    }
+    continuingBase = simd_broadcast_first(continuingBase);
+    if (continuing != 0) {
+        info_out[continuingBase + continuingOffset] = info;
+    }
+
+    uint finishedOffset = simd_prefix_exclusive_sum(finished);
+    uint finishedTotal = simd_sum(finished);
+    uint finishedBase = 0;
+    if (lane == 0 && finishedTotal != 0) {
+        finishedBase = atomic_fetch_add_explicit(count_fin, finishedTotal, memory_order_relaxed);
+    }
+    finishedBase = simd_broadcast_first(finishedBase);
+    if (finished != 0) {
+        info_fin_out[finishedBase + finishedOffset] = info;
+    }
+}
+
 /*
  * NOTE: This implementation relies on fermat320() and fermat352() from procs.metal
  * Those functions would contain the full Montgomery arithmetic-based

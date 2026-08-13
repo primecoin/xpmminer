@@ -165,6 +165,13 @@ inline uint divisionCheck24(thread const uint* data,
     return check24(sum24(data, size, moddata), divisor, inversedMultiplier, offset);
 }
 
+inline void store_u32_le(thread uchar* out, uint value) {
+    out[0] = (uchar)(value & 0xff);
+    out[1] = (uchar)((value >> 8) & 0xff);
+    out[2] = (uchar)((value >> 16) & 0xff);
+    out[3] = (uchar)((value >> 24) & 0xff);
+}
+
 /**
  * JSON Hash Modulus Kernel
  *
@@ -225,8 +232,13 @@ kernel void jsonHashMod(
     sha256_from_midstate(hash1, midstate, message, msgLen);
 
     // Second SHA256 (on 32-byte result)
+    uchar hash1Bytes[32];
+    for (uint i = 0; i < 8; i++) {
+        store_u32_le(&hash1Bytes[i * 4], hash1[i]);
+    }
+
     uint hash2[8];
-    sha256_full(hash2, (thread const uchar*)hash1, 32);
+    sha256_full(hash2, hash1Bytes, 32);
 
     // Convert to little-endian for primorial testing
     // Note: Using alignas to ensure proper alignment for constant pointer access

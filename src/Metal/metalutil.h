@@ -11,6 +11,7 @@
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 #include "loguru.hpp"
+#include <new>
 #include <string>
 #include <vector>
 
@@ -57,7 +58,7 @@ public:
         _size = size;
 
         if (!hostNoAccess) {
-            _hostData = new T[size];
+            _hostData = new (std::nothrow) T[size];
             if (!_hostData) {
                 LOG_F(ERROR, "Failed to allocate host memory for buffer");
                 return false;

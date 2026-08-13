@@ -74,7 +74,7 @@ public:
     void triggerRefresh();  // Set refresh flag and request work
     bool waitForNewWork(const JsonWork& oldWork, int timeoutMs);  // Poll until work changes
 
-    bool submitWork(const JsonWork& work, uint32_t nonce,
+    bool submitWork(const JsonWork& work, uint64_t nonce,
                    const mpz_class& multiplier);
 };
 

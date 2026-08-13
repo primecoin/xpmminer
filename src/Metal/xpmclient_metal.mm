@@ -15,6 +15,7 @@
 #include "prime.h"
 #include <getopt.h>
 #include <chrono>
+#include <algorithm>
 #include <set>
 
 // Include these last to avoid macro conflicts
@@ -30,6 +31,10 @@ int gSieveSize = 10;
 int gWeaveDepth = 8192;
 int gThreadsNum = 1;
 int gPrimeCount = 16384;
+int gMetalSieveWords = 4096;
+int gMetalStripes = 210;
+static bool gMetalAutoTune = true;
+static bool gMetalConfigExplicit = false;
 
 static const char* gWsUrl = nullptr;
 std::vector<unsigned> gPrimes2;
@@ -42,6 +47,7 @@ static bool gTestMode = false;
 
 // Experimental: Submit all chain types (Cunningham1, Cunningham2, BiTwin) instead of just BiTwin
 static bool gSubmitAllChains = false;
+static bool gBenchmarkFailed = false;
 
 //=============================================================================
 // Test Mode Helper Functions (forward declarations and implementations)
@@ -153,11 +159,17 @@ mLSize = LSize;
     _jsonHashModPipeline = nil;
     _sieveSetupPipeline = nil;
     _sievePipeline = nil;
+    _sieveDynamicPipeline = nil;
     _sieveSearchPipeline = nil;
     _fermatSetupPipeline = nil;
     _fermatKernel352Pipeline = nil;
     _fermatKernel320Pipeline = nil;
     _fermatCheckPipeline = nil;
+    _fermatCheckSimdPipeline = nil;
+    _umulhiCorrectnessBenchmarkPipeline = nil;
+    _umulhiThroughputBenchmarkPipeline = nil;
+    _multiplySingle320BenchmarkPipeline = nil;
+    _multiplySimdgroup320BenchmarkPipeline = nil;
 }
 
 PrimeMiner::~PrimeMiner() {
@@ -192,9 +204,15 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
     // FermatDispatch: Process candidates through Fermat pipeline
     fermat.buffer[ridx].count.copyToHost();
     uint32_t& count = fermat.buffer[ridx].count[0];
+    const uint32_t fermatCapacity = (uint32_t)fermat.buffer[ridx].info._size;
+    if (count > fermatCapacity) {
+        LOG_F(WARNING, "FermatDispatch: Clamping input count from %u to capacity %u",
+              count, fermatCapacity);
+        count = fermatCapacity;
+    }
 
     // NEW: Log first few candidates in ridx to see what we're starting with
-    if (count > 0) {
+    if (gDebug && count > 0) {
         fermat.buffer[ridx].info.copyToHost();
         uint32_t toLog = std::min(count, 5u);
         uint32_t chainpos3Input = 0;
@@ -242,7 +260,15 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
     fermat.buffer[widx].count.copyToHost();
     uint32_t widx_original_count = fermat.buffer[widx].count[0];
     uint32_t left = (widx_original_count > fermat.bsize) ? (widx_original_count - fermat.bsize) : 0;
-    if (left > 0 && fermat.bsize > 0) {
+    const uint32_t widxCapacity = (uint32_t)fermat.buffer[widx].info._size;
+    const uint32_t readableLeft = fermat.bsize < widxCapacity ? widxCapacity - fermat.bsize : 0;
+    const uint32_t writableLeft = count < fermatCapacity ? fermatCapacity - count : 0;
+    uint32_t safeLeft = std::min(left, std::min(readableLeft, writableLeft));
+    if (safeLeft != left) {
+        LOG_F(WARNING, "FermatDispatch: Clamping leftover copy from %u to %u candidates",
+              left, safeLeft);
+    }
+    if (safeLeft > 0 && fermat.bsize > 0) {
         //LOG_F(INFO, "FermatDispatch: Copying %u untested leftovers from widx (original count=%u, tested=%u) at offset %u",
 //              left, widx_original_count, fermat.bsize, fermat.bsize);
         id<MTLCommandBuffer> copyBuffer = [_commandQueue commandBuffer];
@@ -251,11 +277,11 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
                        sourceOffset:fermat.bsize * sizeof(fermat_t)
                            toBuffer:fermat.buffer[ridx].info.buffer()
                   destinationOffset:count * sizeof(fermat_t)
-                               size:left * sizeof(fermat_t)];
+                               size:safeLeft * sizeof(fermat_t)];
         [blitEncoder endEncoding];
         [copyBuffer commit];
         [copyBuffer waitUntilCompleted];
-        count += left;
+        count += safeLeft;
     }
 
     fermat.bsize = 0;  // Reset bsize from previous iteration
@@ -264,9 +290,19 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
 
     for (int i = 0; i < sievePerRound; ++i) {
         candidatesCountBuffers[i][ridx].copyToHost();
-        uint32_t& avail = candidatesCountBuffers[i][ridx][pipelineIdx];
+        uint32_t& reportedAvail = candidatesCountBuffers[i][ridx][pipelineIdx];
+        const uint32_t sourceCapacity = (uint32_t)sieveBuffers[i][pipelineIdx][ridx]._size;
+        const uint32_t destinationCapacity = count < fermatCapacity ? fermatCapacity - count : 0;
+        const uint32_t avail = std::min(reportedAvail,
+                                        std::min(sourceCapacity, destinationCapacity));
 
 //        LOG_F(INFO, "FermatDispatch: Sieve %d has %u candidates available", i, avail);
+
+        if (avail != reportedAvail) {
+            LOG_F(WARNING,
+                  "FermatDispatch: Clamping sieve %d candidate copy from %u to %u",
+                  i, reportedAvail, avail);
+        }
 
         if (avail) {
             id<MTLCommandBuffer> copyBuffer = [_commandQueue commandBuffer];
@@ -281,8 +317,8 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
             count += avail;
             testCount += avail;
             fermatCount += avail;
-            avail = 0;
         }
+        reportedAvail = 0;
     }
 
     // Copy updated count back to device (we've been accumulating in host memory)
@@ -391,9 +427,10 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
             LOG_F(INFO, "FermatDispatch: Fermat kernel completed, copying results to inspect");
         }
 
-        fermat.output.copyToHost();
-        fermat.buffer[ridx].info.copyToHost();
-        fermat.input.copyToHost();  // Need input data for debug logging
+        if (gDebug) {
+            fermat.output.copyToHost();
+            fermat.buffer[ridx].info.copyToHost();
+            fermat.input.copyToHost();
 
 //        // DEBUG: Log first chainpos=3 test case for detailed analysis
 //        if (fermat.bsize > 0) {
@@ -422,30 +459,28 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
 //            }
 //        }
 
-        // Count pass/fail by chainpos (same as HIP debug)
-        uint32_t chainpos_tested[10] = {0};
-        uint32_t chainpos_passed[10] = {0};
+            // Count pass/fail by chainpos (same as HIP debug)
+            uint32_t chainpos_tested[10] = {0};
+            uint32_t chainpos_passed[10] = {0};
 
-        // SAFETY: Ensure we don't iterate beyond allocated buffer size
-        uint32_t safe_bsize = std::min(fermat.bsize, (uint32_t)fermat.buffer[ridx].info._size);
-        if (safe_bsize < fermat.bsize) {
-            LOG_F(WARNING, "FermatDispatch: fermat.bsize (%u) exceeds buffer size (%zu), clamping to prevent crash",
-                  fermat.bsize, fermat.buffer[ridx].info._size);
-        }
+            uint32_t safe_bsize = std::min(fermat.bsize, (uint32_t)fermat.buffer[ridx].info._size);
+            if (safe_bsize < fermat.bsize) {
+                LOG_F(WARNING, "FermatDispatch: fermat.bsize (%u) exceeds buffer size (%zu), clamping to prevent crash",
+                      fermat.bsize, fermat.buffer[ridx].info._size);
+            }
 
-        for (uint32_t i = 0; i < safe_bsize; i++) {
-            fermat_t* info = &((fermat_t*)fermat.buffer[ridx].info._hostData)[i];
-            uint8_t result = fermat.output[i];
+            for (uint32_t i = 0; i < safe_bsize; i++) {
+                fermat_t* info = &((fermat_t*)fermat.buffer[ridx].info._hostData)[i];
+                uint8_t result = fermat.output[i];
 
-            if (info->chainpos < 10) {
-                chainpos_tested[info->chainpos]++;
-                if (result == 1) {
-                    chainpos_passed[info->chainpos]++;
+                if (info->chainpos < 10) {
+                    chainpos_tested[info->chainpos]++;
+                    if (result == 1) {
+                        chainpos_passed[info->chainpos]++;
+                    }
                 }
             }
-        }
 
-        if (gDebug) {
             fprintf(stderr, "\n=== METAL FERMAT DEBUG (pipelineIdx=%u, bits=%s) ===\n",
                     pipelineIdx, pipelineIdx == 0 ? "320" : "352");
             fprintf(stderr, "Input count: %u, Tested (bsize): %u\n",
@@ -592,6 +627,8 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         #endif
 
         LOG_F(INFO, "Max threads per threadgroup: %lu", (unsigned long)maxThreadsPerThreadgroup);
+        LOG_F(INFO, "Max threadgroup memory: %lu bytes",
+              (unsigned long)device.maxThreadgroupMemoryLength);
 
         // Create command queue
         _commandQueue = [device newCommandQueue];
@@ -644,25 +681,29 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         _jsonHashModPipeline = createPipeline(@"jsonHashMod");
         _sieveSetupPipeline = createPipeline(@"setup_sieve");
         _sievePipeline = createPipeline(@"sieve");
+        _sieveDynamicPipeline = createPipeline(@"sieve_dynamic");
         _sieveSearchPipeline = createPipeline(@"s_sieve");
         _fermatSetupPipeline = createPipeline(@"setup_fermat");
         _fermatKernel320Pipeline = createPipeline(@"fermat_kernel320");
         _fermatKernel352Pipeline = createPipeline(@"fermat_kernel352");
         _fermatCheckPipeline = createPipeline(@"check_fermat");
+        _fermatCheckSimdPipeline = createPipeline(@"check_fermat_simd");
 
-        // Log threadgroup memory usage for sieve kernel
-        LOG_F(INFO, "Sieve kernel threadgroup memory: %lu bytes (SIZE=%u → %u bytes)",
-              (unsigned long)[_sievePipeline threadExecutionWidth],
-              mConfig.SIZE, mConfig.SIZE * sizeof(uint32_t));
+        LOG_F(INFO, "Sieve kernel thread execution width: %lu",
+              (unsigned long)[_sievePipeline threadExecutionWidth]);
         LOG_F(INFO, "Sieve kernel max total threads per threadgroup: %lu",
               (unsigned long)[_sievePipeline maxTotalThreadsPerThreadgroup]);
+        LOG_F(INFO, "jsonHashMod max total threads per threadgroup: %lu",
+              (unsigned long)[_jsonHashModPipeline maxTotalThreadsPerThreadgroup]);
+        LOG_F(INFO, "jsonHashMod thread execution width: %lu",
+              (unsigned long)[_jsonHashModPipeline threadExecutionWidth]);
         if (@available(macOS 11.0, *)) {
             LOG_F(INFO, "Sieve kernel static threadgroup memory: %lu bytes",
                   (unsigned long)[_sievePipeline staticThreadgroupMemoryLength]);
         }
 
         if (!_jsonHashModPipeline || !_sieveSetupPipeline || !_sievePipeline ||
-            !_sieveSearchPipeline || !_fermatSetupPipeline ||
+            !_sieveDynamicPipeline || !_sieveSearchPipeline || !_fermatSetupPipeline ||
             !_fermatKernel320Pipeline || !_fermatKernel352Pipeline ||
             !_fermatCheckPipeline) {
             LOG_F(ERROR, "Failed to create all required pipeline states");
@@ -674,12 +715,16 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         _multiplyBenchmark352Pipeline = createPipeline(@"multiplyBenchmark352");
         _squareBenchmark320Pipeline = createPipeline(@"squareBenchmark320");
         _squareBenchmark352Pipeline = createPipeline(@"squareBenchmark352");
+        _umulhiCorrectnessBenchmarkPipeline = createPipeline(@"umulhiCorrectnessBenchmark");
+        _umulhiThroughputBenchmarkPipeline = createPipeline(@"umulhiThroughputBenchmark");
+        _multiplySingle320BenchmarkPipeline = createPipeline(@"multiplySingle320Benchmark");
+        _multiplySimdgroup320BenchmarkPipeline = createPipeline(@"multiplySimdgroup320Benchmark");
 
         // Set config based on GPU capabilities
         // Match HIP/CUDA configurations for optimal performance
 		mConfig.N = 12;
-        mConfig.SIZE = 4096;    // Single-pass sieve - fits in 16KB threadgroup memory
-        mConfig.STRIPES = 210;  // NICE
+        mConfig.SIZE = gMetalSieveWords;
+        mConfig.STRIPES = gMetalStripes;
         mConfig.WIDTH = 20;     // Matches HIP/CUDA
 
         if (supportsLSize1024) {
@@ -694,9 +739,19 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
 
         // PCOUNT is configurable via --prime-count parameter
         mConfig.PCOUNT = gPrimeCount;
+        const NSUInteger requiredThreadgroupMemory =
+            (NSUInteger)mConfig.SIZE * sizeof(uint32_t);
+        if (requiredThreadgroupMemory > device.maxThreadgroupMemoryLength) {
+            LOG_F(ERROR,
+                  "Metal sieve requires %lu bytes of threadgroup memory, device supports %lu",
+                  (unsigned long)requiredThreadgroupMemory,
+                  (unsigned long)device.maxThreadgroupMemoryLength);
+            return false;
+        }
         unsigned checksPerThread = mConfig.PCOUNT / mLSize;
-        LOG_F(INFO, "Configuration: PCOUNT=%u, LSIZE=%u → %u prime checks per thread",
-              mConfig.PCOUNT, mLSize, checksPerThread);
+        LOG_F(INFO,
+              "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, LSIZE=%u, %u prime checks per thread",
+              mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT, mLSize, checksPerThread);
 
         mConfig.TARGET = 10;
         mConfig.LIMIT13 = 25;
@@ -718,6 +773,236 @@ static uint32_t rand32() {
     uint32_t result = rand();
     result = (result << 16) | rand();
     return result;
+}
+
+static uint32_t benchmarkRandom(uint32_t& state) {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
+}
+
+static double medianMilliseconds(std::vector<double> samples) {
+    std::sort(samples.begin(), samples.end());
+    size_t middle = samples.size() / 2;
+    if ((samples.size() & 1) != 0)
+        return samples[middle];
+    return (samples[middle - 1] + samples[middle]) * 0.5;
+}
+
+// Correctness and throughput test for the UMULHI primitive used throughout
+// the Montgomery arithmetic. Any future implementation must pass this test
+// before it is used by the production kernels.
+void metalUmulhiBenchmark(id<MTLDevice> device,
+                          id<MTLCommandQueue> commandQueue,
+                          id<MTLComputePipelineState> correctnessPipeline,
+                          id<MTLComputePipelineState> throughputPipeline) {
+    @autoreleasepool {
+        struct OperandPair { uint32_t x; uint32_t y; };
+        const uint32_t elementsNum = 256 * 1024;
+        const uint32_t iterations = 512;
+        std::vector<OperandPair> operands(elementsNum);
+
+        const OperandPair edgeCases[] = {
+            {0, 0}, {0, UINT32_MAX}, {1, UINT32_MAX},
+            {UINT32_MAX, UINT32_MAX}, {0x80000000u, 2},
+            {0x80000000u, 0x80000000u}, {0xffffffffu, 2},
+            {0x12345678u, 0x9abcdef0u}
+        };
+        for (size_t i = 0; i < sizeof(edgeCases) / sizeof(edgeCases[0]); ++i)
+            operands[i] = edgeCases[i];
+
+        uint32_t randomState = 0x6d2b79f5u;
+        for (uint32_t i = sizeof(edgeCases) / sizeof(edgeCases[0]); i < elementsNum; ++i) {
+            operands[i].x = benchmarkRandom(randomState);
+            operands[i].y = benchmarkRandom(randomState);
+        }
+
+        id<MTLBuffer> operandBuffer = [device newBufferWithBytes:operands.data()
+                                                          length:operands.size() * sizeof(OperandPair)
+                                                         options:MTLResourceStorageModeShared];
+        id<MTLBuffer> resultBuffer = [device newBufferWithLength:elementsNum * sizeof(uint32_t)
+                                                         options:MTLResourceStorageModeShared];
+        const NSUInteger groupSize = std::min<NSUInteger>(256,
+            [correctnessPipeline maxTotalThreadsPerThreadgroup]);
+
+        id<MTLCommandBuffer> correctnessCommand = [commandQueue commandBuffer];
+        id<MTLComputeCommandEncoder> correctnessEncoder = [correctnessCommand computeCommandEncoder];
+        [correctnessEncoder setComputePipelineState:correctnessPipeline];
+        [correctnessEncoder setBuffer:operandBuffer offset:0 atIndex:0];
+        [correctnessEncoder setBuffer:resultBuffer offset:0 atIndex:1];
+        [correctnessEncoder dispatchThreads:MTLSizeMake(elementsNum, 1, 1)
+                          threadsPerThreadgroup:MTLSizeMake(groupSize, 1, 1)];
+        [correctnessEncoder endEncoding];
+        [correctnessCommand commit];
+        [correctnessCommand waitUntilCompleted];
+
+        uint32_t* gpuResults = (uint32_t*)resultBuffer.contents;
+        uint32_t mismatches = 0;
+        for (uint32_t i = 0; i < elementsNum; ++i) {
+            uint32_t expected = (uint32_t)(((uint64_t)operands[i].x * operands[i].y) >> 32);
+            if (gpuResults[i] != expected) {
+                if (mismatches < 8) {
+                    LOG_F(ERROR, "UMULHI mismatch[%u]: %08x * %08x, GPU=%08x CPU=%08x",
+                          i, operands[i].x, operands[i].y, gpuResults[i], expected);
+                }
+                ++mismatches;
+            }
+        }
+
+        if (mismatches != 0) {
+            gBenchmarkFailed = true;
+            LOG_F(ERROR, "UMULHI correctness: FAILED (%u/%u mismatches)", mismatches, elementsNum);
+            return;
+        }
+        LOG_F(INFO, "UMULHI correctness: PASS (%u deterministic vectors)", elementsNum);
+
+        std::vector<double> timings;
+        for (unsigned run = 0; run < 4; ++run) {
+            id<MTLCommandBuffer> command = [commandQueue commandBuffer];
+            id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+            [encoder setComputePipelineState:throughputPipeline];
+            [encoder setBuffer:operandBuffer offset:0 atIndex:0];
+            [encoder setBuffer:resultBuffer offset:0 atIndex:1];
+            [encoder setBytes:&iterations length:sizeof(iterations) atIndex:2];
+            [encoder dispatchThreads:MTLSizeMake(elementsNum, 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(groupSize, 1, 1)];
+            [encoder endEncoding];
+
+            auto start = std::chrono::steady_clock::now();
+            [command commit];
+            [command waitUntilCompleted];
+            auto end = std::chrono::steady_clock::now();
+            if (run != 0) {
+                timings.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+            }
+        }
+
+        // Validate a subset after the repeated-operation benchmark too.
+        for (uint32_t i = 0; i < 1024; ++i) {
+            uint32_t x = operands[i].x;
+            uint32_t y = operands[i].y;
+            for (uint32_t j = 0; j < iterations; ++j) {
+                x = (uint32_t)(((uint64_t)(x ^ (0x9e3779b9u + j)) * y) >> 32);
+                y = y * 1664525u + 1013904223u;
+            }
+            if (gpuResults[i] != x) {
+                gBenchmarkFailed = true;
+                LOG_F(ERROR, "UMULHI throughput validation: FAILED at vector %u", i);
+                return;
+            }
+        }
+
+        double medianMs = medianMilliseconds(timings);
+        double operations = (double)elementsNum * iterations;
+        double mops = operations / (medianMs * 1000.0);
+        LOG_F(INFO, "UMULHI throughput: %.0f Mops/s (median %.3f ms, 3 runs)", mops, medianMs);
+    }
+}
+
+void metalCooperativeMultiplyBenchmark(id<MTLDevice> device,
+                                       id<MTLCommandQueue> commandQueue,
+                                       id<MTLComputePipelineState> scalarPipeline,
+                                       id<MTLComputePipelineState> simdPipeline) {
+    @autoreleasepool {
+        const uint32_t elementsNum = 256 * 1024;
+        const uint32_t operandLimbs = 10;
+        const uint32_t resultLimbs = 20;
+        const uint32_t groupSize = 256;
+        const NSUInteger simdWidth = [simdPipeline threadExecutionWidth];
+        if (simdWidth < resultLimbs || groupSize % simdWidth != 0) {
+            LOG_F(WARNING, "Cooperative multiply skipped: SIMD width %lu is incompatible",
+                  (unsigned long)simdWidth);
+            return;
+        }
+
+        std::vector<uint32_t> op1((size_t)elementsNum * operandLimbs);
+        std::vector<uint32_t> op2((size_t)elementsNum * operandLimbs);
+        uint32_t randomState = 0xc001d00du;
+        for (size_t i = 0; i < op1.size(); ++i) {
+            op1[i] = benchmarkRandom(randomState);
+            op2[i] = benchmarkRandom(randomState);
+        }
+
+        id<MTLBuffer> op1Buffer = [device newBufferWithBytes:op1.data()
+                                                        length:op1.size() * sizeof(uint32_t)
+                                                       options:MTLResourceStorageModeShared];
+        id<MTLBuffer> op2Buffer = [device newBufferWithBytes:op2.data()
+                                                        length:op2.size() * sizeof(uint32_t)
+                                                       options:MTLResourceStorageModeShared];
+        id<MTLBuffer> scalarResults = [device newBufferWithLength:(size_t)elementsNum * resultLimbs * sizeof(uint32_t)
+                                                          options:MTLResourceStorageModeShared];
+        id<MTLBuffer> simdResults = [device newBufferWithLength:(size_t)elementsNum * resultLimbs * sizeof(uint32_t)
+                                                        options:MTLResourceStorageModeShared];
+
+        auto runKernel = [&](id<MTLComputePipelineState> pipeline,
+                             id<MTLBuffer> output,
+                             uint64_t threads) {
+            id<MTLCommandBuffer> command = [commandQueue commandBuffer];
+            id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+            [encoder setComputePipelineState:pipeline];
+            [encoder setBuffer:op1Buffer offset:0 atIndex:0];
+            [encoder setBuffer:op2Buffer offset:0 atIndex:1];
+            [encoder setBuffer:output offset:0 atIndex:2];
+            [encoder dispatchThreads:MTLSizeMake(threads, 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(groupSize, 1, 1)];
+            [encoder endEncoding];
+
+            auto start = std::chrono::steady_clock::now();
+            [command commit];
+            [command waitUntilCompleted];
+            auto end = std::chrono::steady_clock::now();
+            return std::chrono::duration<double, std::milli>(end - start).count();
+        };
+
+        runKernel(scalarPipeline, scalarResults, elementsNum);
+        runKernel(simdPipeline, simdResults, (uint64_t)elementsNum * simdWidth);
+
+        size_t resultBytes = (size_t)elementsNum * resultLimbs * sizeof(uint32_t);
+        if (memcmp(scalarResults.contents, simdResults.contents, resultBytes) != 0) {
+            uint32_t* scalar = (uint32_t*)scalarResults.contents;
+            uint32_t* cooperative = (uint32_t*)simdResults.contents;
+            size_t mismatch = 0;
+            while (mismatch < (size_t)elementsNum * resultLimbs && scalar[mismatch] == cooperative[mismatch])
+                ++mismatch;
+            gBenchmarkFailed = true;
+            LOG_F(ERROR, "Cooperative multiply equivalence: FAILED at candidate %zu limb %zu",
+                  mismatch / resultLimbs, mismatch % resultLimbs);
+            return;
+        }
+
+        uint32_t* scalar = (uint32_t*)scalarResults.contents;
+        for (uint32_t i = 0; i < 1024; ++i) {
+            mpz_class a;
+            mpz_class b;
+            mpz_class product;
+            mpz_import(a.get_mpz_t(), operandLimbs, -1, 4, 0, 0, &op1[(size_t)i * operandLimbs]);
+            mpz_import(b.get_mpz_t(), operandLimbs, -1, 4, 0, 0, &op2[(size_t)i * operandLimbs]);
+            product = a * b;
+            uint32_t expected[resultLimbs] = {0};
+            size_t exported = 0;
+            mpz_export(expected, &exported, -1, 4, 0, 0, product.get_mpz_t());
+            if (memcmp(expected, &scalar[(size_t)i * resultLimbs], sizeof(expected)) != 0) {
+                gBenchmarkFailed = true;
+                LOG_F(ERROR, "Cooperative multiply CPU validation: FAILED at candidate %u", i);
+                return;
+            }
+        }
+
+        runKernel(scalarPipeline, scalarResults, elementsNum);
+        runKernel(simdPipeline, simdResults, (uint64_t)elementsNum * simdWidth);
+        std::vector<double> scalarTimings;
+        std::vector<double> simdTimings;
+        for (unsigned run = 0; run < 5; ++run) {
+            scalarTimings.push_back(runKernel(scalarPipeline, scalarResults, elementsNum));
+            simdTimings.push_back(runKernel(simdPipeline, simdResults,
+                                            (uint64_t)elementsNum * simdWidth));
+        }
+        double scalarMs = medianMilliseconds(scalarTimings);
+        double simdMs = medianMilliseconds(simdTimings);
+        LOG_F(INFO, "Cooperative multiply: PASS, scalar %.3f ms, SIMD-group %.3f ms, %.3fx speedup",
+              scalarMs, simdMs, scalarMs / simdMs);
+    }
 }
 
 // Benchmark: Multiply performance
@@ -836,12 +1121,11 @@ void metalFermatTestBenchmark(id<MTLDevice> device,
                                id<MTLComputePipelineState> fermat352,
                                unsigned elementsNum) {
     @autoreleasepool {
-        srand(12345);  // Use same seed as HIP for consistency
-
         // Test both 320-bit and 352-bit
         for (int bits : {320, 352}) {
             unsigned operandSize = bits / 32;
             id<MTLComputePipelineState> kernel = (bits == 320) ? fermat320 : fermat352;
+            const unsigned correctnessElements = std::min(elementsNum, 4096u);
 
             // Create buffers
             id<MTLBuffer> numbers = [device newBufferWithLength:elementsNum * operandSize * sizeof(uint32_t)
@@ -849,41 +1133,42 @@ void metalFermatTestBenchmark(id<MTLDevice> device,
             id<MTLBuffer> gpuResults = [device newBufferWithLength:elementsNum * sizeof(uint8_t)
                                                         options:MTLResourceStorageModeShared];
 
-            // Generate random test primes
-            uint32_t* numbersData = (uint32_t*)[numbers contents];
-            for (unsigned i = 0; i < elementsNum; i++) {
-                for (unsigned j = 0; j < operandSize; j++) {
-                    numbersData[i * operandSize + j] = (j == operandSize - 1) ?
-                                                         (1 << (i % 32)) : (uint32_t)rand();
+            // Build deterministic full-width odd candidates in candidate-major
+            // layout first. The production kernel consumes limb-major input.
+            std::vector<uint32_t> candidates(elementsNum * operandSize);
+            uint32_t randomState = 0x12345678u ^ (uint32_t)bits;
+            for (unsigned i = 0; i < elementsNum; ++i) {
+                uint32_t* candidate = &candidates[i * operandSize];
+                for (unsigned j = 0; j < operandSize; ++j)
+                    candidate[j] = benchmarkRandom(randomState);
+                candidate[0] |= 1u;
+                candidate[operandSize - 1] |= 0x80000000u;
+
+                // Include known probable primes so correctness does not pass
+                // merely because every random composite returns false.
+                if (i < 64) {
+                    mpz_class value;
+                    mpz_import(value.get_mpz_t(), operandSize, -1, 4, 0, 0, candidate);
+                    mpz_nextprime(value.get_mpz_t(), value.get_mpz_t());
+                    memset(candidate, 0, operandSize * sizeof(uint32_t));
+                    size_t exported = 0;
+                    mpz_export(candidate, &exported, -1, 4, 0, 0, value.get_mpz_t());
                 }
-                numbersData[i * operandSize] |= 0x1;  // Make odd
             }
 
-            // === GPU BENCHMARK ===
-            auto gpuStart = std::chrono::steady_clock::now();
-
-            id<MTLCommandBuffer> cmdBuffer = [commandQueue commandBuffer];
-            id<MTLComputeCommandEncoder> encoder = [cmdBuffer computeCommandEncoder];
-            [encoder setComputePipelineState:kernel];
-            [encoder setBuffer:gpuResults offset:0 atIndex:0];
-            [encoder setBuffer:numbers offset:0 atIndex:1];
-
-            MTLSize grid = MTLSizeMake((elementsNum + 255) / 256, 1, 1);
-            MTLSize threadgroup = MTLSizeMake(256, 1, 1);
-            [encoder dispatchThreadgroups:grid threadsPerThreadgroup:threadgroup];
-            [encoder endEncoding];
-            [cmdBuffer commit];
-            [cmdBuffer waitUntilCompleted];
-
-            auto gpuEnd = std::chrono::steady_clock::now();
+            uint32_t* numbersData = (uint32_t*)[numbers contents];
+            for (unsigned i = 0; i < elementsNum; ++i)
+                for (unsigned j = 0; j < operandSize; ++j)
+                    numbersData[j * elementsNum + i] = candidates[i * operandSize + j];
 
             // === CPU BENCHMARK (using GMP) ===
             auto cpuStart = std::chrono::steady_clock::now();
 
-            std::unique_ptr<uint32_t[]> cpuResults(new uint32_t[elementsNum]);
-            for (unsigned i = 0; i < elementsNum; i++) {
+            std::vector<uint8_t> cpuResults(correctnessElements);
+            for (unsigned i = 0; i < correctnessElements; i++) {
                 mpz_class number;
-                mpz_import(number.get_mpz_t(), operandSize, -1, 4, 0, 0, &numbersData[i * operandSize]);
+                mpz_import(number.get_mpz_t(), operandSize, -1, 4, 0, 0,
+                           &candidates[i * operandSize]);
 
                 // Fermat test: a^(n-1) mod n == 1 (using base 2)
                 mpz_class base = 2;
@@ -895,16 +1180,406 @@ void metalFermatTestBenchmark(id<MTLDevice> device,
             }
 
             auto cpuEnd = std::chrono::steady_clock::now();
+            double cpuTime = std::chrono::duration<double, std::milli>(cpuEnd - cpuStart).count();
+            double cpuMopsPerSec = ((double)correctnessElements / 1000000.0) / (cpuTime / 1000.0);
 
-            // === CALCULATE METRICS ===
-            double gpuTime = std::chrono::duration_cast<std::chrono::microseconds>(gpuEnd - gpuStart).count() / 1000.0;
-            double cpuTime = std::chrono::duration_cast<std::chrono::microseconds>(cpuEnd - cpuStart).count() / 1000.0;
-            double gpuMopsPerSec = ((double)elementsNum / 1000000.0) / (gpuTime / 1000.0);
-            double cpuMopsPerSec = ((double)elementsNum / 1000000.0) / (cpuTime / 1000.0);
-            double speedup = cpuTime / gpuTime;
+            const unsigned groupSizes[] = {32, 64, 128, 256};
+            for (unsigned groupSize : groupSizes) {
+                if (groupSize > [kernel maxTotalThreadsPerThreadgroup])
+                    continue;
 
-            LOG_F(INFO, "Fermat tests %d bits: GPU %.2lf Mops/s, CPU %.2lf Mops/s (%.2lfx faster)",
-                  bits, gpuMopsPerSec, cpuMopsPerSec, speedup);
+                // One warm-up followed by three timed runs.
+                std::vector<double> gpuTimings;
+                for (unsigned run = 0; run < 4; ++run) {
+                    id<MTLCommandBuffer> cmdBuffer = [commandQueue commandBuffer];
+                    id<MTLComputeCommandEncoder> encoder = [cmdBuffer computeCommandEncoder];
+                    [encoder setComputePipelineState:kernel];
+                    [encoder setBuffer:gpuResults offset:0 atIndex:0];
+                    [encoder setBuffer:numbers offset:0 atIndex:1];
+
+                    MTLSize grid = MTLSizeMake(elementsNum / groupSize, 1, 1);
+                    MTLSize threadgroup = MTLSizeMake(groupSize, 1, 1);
+                    [encoder dispatchThreadgroups:grid threadsPerThreadgroup:threadgroup];
+                    [encoder endEncoding];
+
+                    auto gpuStart = std::chrono::steady_clock::now();
+                    [cmdBuffer commit];
+                    [cmdBuffer waitUntilCompleted];
+                    auto gpuEnd = std::chrono::steady_clock::now();
+                    if (run != 0) {
+                        gpuTimings.push_back(
+                            std::chrono::duration<double, std::milli>(gpuEnd - gpuStart).count());
+                    }
+                }
+
+                uint8_t* gpuResultData = (uint8_t*)gpuResults.contents;
+                unsigned mismatches = 0;
+                for (unsigned i = 0; i < correctnessElements; ++i) {
+                    if (gpuResultData[i] != cpuResults[i]) {
+                        if (mismatches < 8) {
+                            LOG_F(ERROR, "Fermat %d/tg%u mismatch[%u]: GPU=%u CPU=%u",
+                                  bits, groupSize, i, gpuResultData[i], cpuResults[i]);
+                        }
+                        ++mismatches;
+                    }
+                }
+                if (mismatches != 0) {
+                    gBenchmarkFailed = true;
+                    LOG_F(ERROR, "Fermat correctness %d bits/tg%u: FAILED (%u/%u mismatches)",
+                          bits, groupSize, mismatches, correctnessElements);
+                    continue;
+                }
+
+                double gpuTime = medianMilliseconds(gpuTimings);
+                double gpuMopsPerSec = ((double)elementsNum / 1000000.0) / (gpuTime / 1000.0);
+                double speedup = gpuMopsPerSec / cpuMopsPerSec;
+                LOG_F(INFO, "Fermat %d/tg%u: PASS, %.2lf Mops/s (median %.3lf ms, %.2lfx CPU)",
+                      bits, groupSize, gpuMopsPerSec, gpuTime, speedup);
+            }
+        }
+    }
+}
+
+// Compare the current three-command-buffer Fermat sequence with the proposed
+// single-command-buffer sequence. Separate encoders retain explicit resource
+// boundaries while removing CPU waits between dependent kernels.
+void metalFermatSchedulingBenchmark(id<MTLDevice> device,
+                                    id<MTLCommandQueue> commandQueue,
+                                    id<MTLComputePipelineState> setupPipeline,
+                                    id<MTLComputePipelineState> fermatPipeline,
+                                    id<MTLComputePipelineState> checkPipeline) {
+    @autoreleasepool {
+        const uint32_t elementsNum = 64 * 1024;
+        const uint32_t groupSize = 256;
+        const uint32_t limbCount = 11;
+        const uint32_t hashLimbCount = 12;
+        const uint32_t depth = 4;
+
+        std::vector<fermat_t> info(elementsNum);
+        for (uint32_t i = 0; i < elementsNum; ++i) {
+            info[i].index = 3 + i * 2;
+            info[i].hashid = 0;
+            info[i].origin = i % 4;
+            info[i].chainpos = 0;
+            info[i].type = i % 3;
+            info[i].reserved = 0;
+        }
+
+        uint32_t hash[hashLimbCount] = {
+            0x89abcdefu, 0x01234567u, 0xfedcba98u, 0x76543210u,
+            0x13579bdfu, 0x2468ace0u, 0x0badf00du, 0x80000001u,
+            0, 0, 0, 0
+        };
+
+        id<MTLBuffer> infoInput = [device newBufferWithBytes:info.data()
+                                                        length:info.size() * sizeof(fermat_t)
+                                                       options:MTLResourceStorageModeShared];
+        id<MTLBuffer> hashInput = [device newBufferWithBytes:hash
+                                                        length:sizeof(hash)
+                                                       options:MTLResourceStorageModeShared];
+        id<MTLBuffer> fermatInput = [device newBufferWithLength:(size_t)elementsNum * limbCount * sizeof(uint32_t)
+                                                        options:MTLResourceStorageModeShared];
+        id<MTLBuffer> fermatResults = [device newBufferWithLength:elementsNum
+                                                          options:MTLResourceStorageModeShared];
+        id<MTLBuffer> continuationInfo = [device newBufferWithLength:(size_t)elementsNum * sizeof(fermat_t)
+                                                             options:MTLResourceStorageModeShared];
+        id<MTLBuffer> continuationCount = [device newBufferWithLength:sizeof(uint32_t)
+                                                               options:MTLResourceStorageModeShared];
+        id<MTLBuffer> finalInfo = [device newBufferWithLength:(size_t)elementsNum * sizeof(fermat_t)
+                                                     options:MTLResourceStorageModeShared];
+        id<MTLBuffer> finalCount = [device newBufferWithLength:sizeof(uint32_t)
+                                                      options:MTLResourceStorageModeShared];
+        id<MTLBuffer> debugBuffer = [device newBufferWithLength:4 * 64 * sizeof(uint32_t)
+                                                       options:MTLResourceStorageModeShared];
+
+        auto resetOutputs = [&]() {
+            memset(continuationCount.contents, 0, sizeof(uint32_t));
+            memset(finalCount.contents, 0, sizeof(uint32_t));
+            memset(fermatResults.contents, 0, elementsNum);
+            memset(debugBuffer.contents, 0, 4 * 64 * sizeof(uint32_t));
+        };
+
+        auto encodeSetup = [&](id<MTLCommandBuffer> command) {
+            id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+            [encoder setComputePipelineState:setupPipeline];
+            [encoder setBuffer:fermatInput offset:0 atIndex:0];
+            [encoder setBuffer:infoInput offset:0 atIndex:1];
+            [encoder setBuffer:hashInput offset:0 atIndex:2];
+            [encoder setBytes:&hashLimbCount length:sizeof(hashLimbCount) atIndex:3];
+            [encoder setBuffer:debugBuffer offset:0 atIndex:4];
+            [encoder dispatchThreadgroups:MTLSizeMake(elementsNum / groupSize, 1, 1)
+                         threadsPerThreadgroup:MTLSizeMake(groupSize, 1, 1)];
+            [encoder endEncoding];
+        };
+
+        auto encodeFermat = [&](id<MTLCommandBuffer> command) {
+            id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+            [encoder setComputePipelineState:fermatPipeline];
+            [encoder setBuffer:fermatResults offset:0 atIndex:0];
+            [encoder setBuffer:fermatInput offset:0 atIndex:1];
+            [encoder dispatchThreadgroups:MTLSizeMake(elementsNum / groupSize, 1, 1)
+                         threadsPerThreadgroup:MTLSizeMake(groupSize, 1, 1)];
+            [encoder endEncoding];
+        };
+
+        auto encodeCheck = [&](id<MTLCommandBuffer> command) {
+            id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+            [encoder setComputePipelineState:checkPipeline];
+            [encoder setBuffer:continuationInfo offset:0 atIndex:0];
+            [encoder setBuffer:continuationCount offset:0 atIndex:1];
+            [encoder setBuffer:finalInfo offset:0 atIndex:2];
+            [encoder setBuffer:finalCount offset:0 atIndex:3];
+            [encoder setBuffer:fermatResults offset:0 atIndex:4];
+            [encoder setBuffer:infoInput offset:0 atIndex:5];
+            [encoder setBytes:&depth length:sizeof(depth) atIndex:6];
+            [encoder dispatchThreadgroups:MTLSizeMake(elementsNum / groupSize, 1, 1)
+                         threadsPerThreadgroup:MTLSizeMake(groupSize, 1, 1)];
+            [encoder endEncoding];
+        };
+
+        auto runSequence = [&](bool fused) {
+            resetOutputs();
+            auto start = std::chrono::steady_clock::now();
+
+            if (fused) {
+                id<MTLCommandBuffer> command = [commandQueue commandBuffer];
+                encodeSetup(command);
+                encodeFermat(command);
+                encodeCheck(command);
+                [command commit];
+                [command waitUntilCompleted];
+            } else {
+                id<MTLCommandBuffer> setupCommand = [commandQueue commandBuffer];
+                encodeSetup(setupCommand);
+                [setupCommand commit];
+                [setupCommand waitUntilCompleted];
+
+                id<MTLCommandBuffer> fermatCommand = [commandQueue commandBuffer];
+                encodeFermat(fermatCommand);
+                [fermatCommand commit];
+                [fermatCommand waitUntilCompleted];
+
+                id<MTLCommandBuffer> checkCommand = [commandQueue commandBuffer];
+                encodeCheck(checkCommand);
+                [checkCommand commit];
+                [checkCommand waitUntilCompleted];
+            }
+
+            auto end = std::chrono::steady_clock::now();
+            return std::chrono::duration<double, std::milli>(end - start).count();
+        };
+
+        runSequence(false);
+        std::vector<uint8_t> baselineResults(elementsNum);
+        memcpy(baselineResults.data(), fermatResults.contents, elementsNum);
+        uint32_t baselineContinuationCount = *(uint32_t*)continuationCount.contents;
+        uint32_t baselineFinalCount = *(uint32_t*)finalCount.contents;
+        std::vector<fermat_t> baselineContinuation(baselineContinuationCount);
+        std::vector<fermat_t> baselineFinal(baselineFinalCount);
+        memcpy(baselineContinuation.data(), continuationInfo.contents,
+               baselineContinuation.size() * sizeof(fermat_t));
+        memcpy(baselineFinal.data(), finalInfo.contents,
+               baselineFinal.size() * sizeof(fermat_t));
+
+        runSequence(true);
+        uint32_t fusedContinuationCount = *(uint32_t*)continuationCount.contents;
+        uint32_t fusedFinalCount = *(uint32_t*)finalCount.contents;
+        std::vector<fermat_t> fusedContinuation(fusedContinuationCount);
+        std::vector<fermat_t> fusedFinal(fusedFinalCount);
+        memcpy(fusedContinuation.data(), continuationInfo.contents,
+               fusedContinuation.size() * sizeof(fermat_t));
+        memcpy(fusedFinal.data(), finalInfo.contents,
+               fusedFinal.size() * sizeof(fermat_t));
+
+        auto lessInfo = [](const fermat_t& a, const fermat_t& b) {
+            if (a.index != b.index) return a.index < b.index;
+            if (a.hashid != b.hashid) return a.hashid < b.hashid;
+            if (a.origin != b.origin) return a.origin < b.origin;
+            if (a.chainpos != b.chainpos) return a.chainpos < b.chainpos;
+            return a.type < b.type;
+        };
+        auto equalInfo = [](const fermat_t& a, const fermat_t& b) {
+            return a.index == b.index && a.hashid == b.hashid &&
+                   a.origin == b.origin && a.chainpos == b.chainpos &&
+                   a.type == b.type;
+        };
+        std::sort(baselineContinuation.begin(), baselineContinuation.end(), lessInfo);
+        std::sort(fusedContinuation.begin(), fusedContinuation.end(), lessInfo);
+        std::sort(baselineFinal.begin(), baselineFinal.end(), lessInfo);
+        std::sort(fusedFinal.begin(), fusedFinal.end(), lessInfo);
+
+        bool resultsEqual = memcmp(baselineResults.data(), fermatResults.contents, elementsNum) == 0;
+        bool continuationEqual = baselineContinuationCount == fusedContinuationCount &&
+            std::equal(baselineContinuation.begin(), baselineContinuation.end(),
+                       fusedContinuation.begin(), equalInfo);
+        bool finalEqual = baselineFinalCount == fusedFinalCount &&
+            std::equal(baselineFinal.begin(), baselineFinal.end(),
+                       fusedFinal.begin(), equalInfo);
+
+        if (!resultsEqual || !continuationEqual || !finalEqual) {
+            gBenchmarkFailed = true;
+            LOG_F(ERROR, "Fermat scheduling equivalence: FAILED (results=%s continuation=%s final=%s)",
+                  resultsEqual ? "match" : "different",
+                  continuationEqual ? "match" : "different",
+                  finalEqual ? "match" : "different");
+            return;
+        }
+        LOG_F(INFO, "Fermat scheduling equivalence: PASS (%u inputs, %u continuing, %u final)",
+              elementsNum, fusedContinuationCount, fusedFinalCount);
+
+        std::vector<double> stagedTimings;
+        std::vector<double> fusedTimings;
+        runSequence(false);
+        runSequence(true);
+        for (unsigned run = 0; run < 5; ++run) {
+            stagedTimings.push_back(runSequence(false));
+            fusedTimings.push_back(runSequence(true));
+        }
+        double stagedMs = medianMilliseconds(stagedTimings);
+        double fusedMs = medianMilliseconds(fusedTimings);
+        LOG_F(INFO, "Fermat scheduling: staged %.3f ms, fused %.3f ms, %.3fx speedup (median, 5 runs)",
+              stagedMs, fusedMs, stagedMs / fusedMs);
+    }
+}
+
+void metalFermatCompactionBenchmark(id<MTLDevice> device,
+                                    id<MTLCommandQueue> commandQueue,
+                                    id<MTLComputePipelineState> atomicPipeline,
+                                    id<MTLComputePipelineState> simdPipeline) {
+    @autoreleasepool {
+        const uint32_t elementsNum = 256 * 1024;
+        const uint32_t groupSize = 256;
+        const uint32_t depth = 4;
+
+        std::vector<fermat_t> input(elementsNum);
+        std::vector<uint8_t> resultData(elementsNum);
+        for (uint32_t i = 0; i < elementsNum; ++i) {
+            input[i].index = i * 2 + 1;
+            input[i].hashid = i % 512;
+            input[i].origin = i % 20;
+            input[i].chainpos = (i & 1) ? 2 : 3;
+            input[i].type = i % 3;
+            input[i].reserved = 0;
+        }
+
+        id<MTLBuffer> infoInput = [device newBufferWithBytes:input.data()
+                                                        length:input.size() * sizeof(fermat_t)
+                                                       options:MTLResourceStorageModeShared];
+        id<MTLBuffer> results = [device newBufferWithLength:elementsNum
+                                                   options:MTLResourceStorageModeShared];
+        id<MTLBuffer> continuationInfo = [device newBufferWithLength:(size_t)elementsNum * sizeof(fermat_t)
+                                                             options:MTLResourceStorageModeShared];
+        id<MTLBuffer> continuationCount = [device newBufferWithLength:sizeof(uint32_t)
+                                                               options:MTLResourceStorageModeShared];
+        id<MTLBuffer> finalInfo = [device newBufferWithLength:(size_t)elementsNum * sizeof(fermat_t)
+                                                     options:MTLResourceStorageModeShared];
+        id<MTLBuffer> finalCount = [device newBufferWithLength:sizeof(uint32_t)
+                                                      options:MTLResourceStorageModeShared];
+
+        auto runCheck = [&](id<MTLComputePipelineState> pipeline) {
+            memset(continuationCount.contents, 0, sizeof(uint32_t));
+            memset(finalCount.contents, 0, sizeof(uint32_t));
+
+            id<MTLCommandBuffer> command = [commandQueue commandBuffer];
+            id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+            [encoder setComputePipelineState:pipeline];
+            [encoder setBuffer:continuationInfo offset:0 atIndex:0];
+            [encoder setBuffer:continuationCount offset:0 atIndex:1];
+            [encoder setBuffer:finalInfo offset:0 atIndex:2];
+            [encoder setBuffer:finalCount offset:0 atIndex:3];
+            [encoder setBuffer:results offset:0 atIndex:4];
+            [encoder setBuffer:infoInput offset:0 atIndex:5];
+            [encoder setBytes:&depth length:sizeof(depth) atIndex:6];
+            [encoder dispatchThreadgroups:MTLSizeMake(elementsNum / groupSize, 1, 1)
+                         threadsPerThreadgroup:MTLSizeMake(groupSize, 1, 1)];
+            [encoder endEncoding];
+
+            auto start = std::chrono::steady_clock::now();
+            [command commit];
+            [command waitUntilCompleted];
+            auto end = std::chrono::steady_clock::now();
+            return std::chrono::duration<double, std::milli>(end - start).count();
+        };
+
+        auto lessInfo = [](const fermat_t& a, const fermat_t& b) {
+            if (a.index != b.index) return a.index < b.index;
+            if (a.hashid != b.hashid) return a.hashid < b.hashid;
+            if (a.origin != b.origin) return a.origin < b.origin;
+            if (a.chainpos != b.chainpos) return a.chainpos < b.chainpos;
+            return a.type < b.type;
+        };
+        auto equalInfo = [](const fermat_t& a, const fermat_t& b) {
+            return a.index == b.index && a.hashid == b.hashid &&
+                   a.origin == b.origin && a.chainpos == b.chainpos &&
+                   a.type == b.type;
+        };
+
+        struct PassScenario { uint32_t divisor; const char* label; };
+        const PassScenario scenarios[] = {{100, "1%"}, {4, "25%"}, {1, "100%"}};
+        for (const PassScenario& scenario : scenarios) {
+            for (uint32_t i = 0; i < elementsNum; ++i)
+                resultData[i] = (i % scenario.divisor == 0) ? 1 : 0;
+            memcpy(results.contents, resultData.data(), elementsNum);
+
+            runCheck(atomicPipeline);
+            uint32_t atomicContinuationCount = *(uint32_t*)continuationCount.contents;
+            uint32_t atomicFinalCount = *(uint32_t*)finalCount.contents;
+            if (atomicContinuationCount > elementsNum || atomicFinalCount > elementsNum) {
+                gBenchmarkFailed = true;
+                LOG_F(ERROR, "Compaction %s baseline produced invalid counts", scenario.label);
+                return;
+            }
+            std::vector<fermat_t> atomicContinuation(atomicContinuationCount);
+            std::vector<fermat_t> atomicFinal(atomicFinalCount);
+            memcpy(atomicContinuation.data(), continuationInfo.contents,
+                   atomicContinuation.size() * sizeof(fermat_t));
+            memcpy(atomicFinal.data(), finalInfo.contents,
+                   atomicFinal.size() * sizeof(fermat_t));
+
+            runCheck(simdPipeline);
+            uint32_t simdContinuationCount = *(uint32_t*)continuationCount.contents;
+            uint32_t simdFinalCount = *(uint32_t*)finalCount.contents;
+            if (simdContinuationCount > elementsNum || simdFinalCount > elementsNum) {
+                gBenchmarkFailed = true;
+                LOG_F(ERROR, "Compaction %s SIMD variant produced invalid counts", scenario.label);
+                return;
+            }
+            std::vector<fermat_t> simdContinuation(simdContinuationCount);
+            std::vector<fermat_t> simdFinal(simdFinalCount);
+            memcpy(simdContinuation.data(), continuationInfo.contents,
+                   simdContinuation.size() * sizeof(fermat_t));
+            memcpy(simdFinal.data(), finalInfo.contents,
+                   simdFinal.size() * sizeof(fermat_t));
+
+            std::sort(atomicContinuation.begin(), atomicContinuation.end(), lessInfo);
+            std::sort(atomicFinal.begin(), atomicFinal.end(), lessInfo);
+            std::sort(simdContinuation.begin(), simdContinuation.end(), lessInfo);
+            std::sort(simdFinal.begin(), simdFinal.end(), lessInfo);
+            bool equivalent = atomicContinuationCount == simdContinuationCount &&
+                atomicFinalCount == simdFinalCount &&
+                std::equal(atomicContinuation.begin(), atomicContinuation.end(),
+                           simdContinuation.begin(), equalInfo) &&
+                std::equal(atomicFinal.begin(), atomicFinal.end(),
+                           simdFinal.begin(), equalInfo);
+            if (!equivalent) {
+                gBenchmarkFailed = true;
+                LOG_F(ERROR, "Compaction %s equivalence: FAILED", scenario.label);
+                return;
+            }
+
+            runCheck(atomicPipeline);
+            runCheck(simdPipeline);
+            std::vector<double> atomicTimings;
+            std::vector<double> simdTimings;
+            for (unsigned run = 0; run < 7; ++run) {
+                atomicTimings.push_back(runCheck(atomicPipeline));
+                simdTimings.push_back(runCheck(simdPipeline));
+            }
+            double atomicMs = medianMilliseconds(atomicTimings);
+            double simdMs = medianMilliseconds(simdTimings);
+            LOG_F(INFO, "Compaction %s: PASS, atomic %.3f ms, SIMD %.3f ms, %.3fx speedup (%u outputs)",
+                  scenario.label, atomicMs, simdMs, atomicMs / simdMs,
+                  simdContinuationCount + simdFinalCount);
         }
     }
 }
@@ -1045,11 +1720,328 @@ void metalSieveCheckBenchmark(PrimeMiner* miner) {
     }
 }
 
+// Shared sieve evaluator used by both the full benchmark and startup autotuning.
+bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
+    @autoreleasepool {
+        struct PrimePair { uint32_t prime; uint32_t reciprocal; };
+        struct SieveScenario {
+            uint32_t size;
+            uint32_t primeCount;
+            uint32_t stripes;
+            bool dynamicMemory;
+        };
+        const SieveScenario scenarios[] = {
+            {2048, 16384, 210, false},
+            {4096, 8192, 210, false},
+            {4096, 16384, 210, false},
+            {4096, 32768, 210, false},
+            {4096, 65536, 210, false},
+            {4096, 16384, 630, false},
+            {4096, 32768, 630, false},
+            {4096, 65536, 630, false},
+            {4096, 16384, 210, true},
+            {8192, 16384, 106, true},
+            {8192, 32768, 106, true},
+            {8192, 16384, 210, true},
+            {8192, 32768, 210, true},
+            {8192, 16384, 316, true},
+            {8192, 32768, 316, true},
+            {8192, 65536, 316, true}
+        };
+        const uint32_t width = 20;
+        const uint32_t lsize = 1024;
+
+        auto digestWords = [](const uint32_t* words, size_t count) {
+            uint64_t digest = 1469598103934665603ull;
+            for (size_t i = 0; i < count; ++i) {
+                digest ^= words[i];
+                digest *= 1099511628211ull;
+            }
+            return digest;
+        };
+
+        uint64_t staticBaselineDigest = 0;
+        uint32_t staticBaselineCount320 = 0;
+        uint32_t staticBaselineCount352 = 0;
+        bool foundUsableScenario = false;
+        double bestScore = 0.0;
+        SieveScenario bestScenario = {4096, 16384, 210, false};
+        for (const SieveScenario& scenario : scenarios) {
+            if (autoTune) {
+                const bool startupCandidate =
+                    (scenario.size == 4096 && scenario.stripes == 210 &&
+                     scenario.primeCount == 16384 && !scenario.dynamicMemory) ||
+                    (scenario.size == 4096 && scenario.stripes == 630 &&
+                     scenario.primeCount == 16384 && !scenario.dynamicMemory) ||
+                    (scenario.size == 8192 && scenario.stripes == 106 &&
+                     scenario.primeCount == 16384 && scenario.dynamicMemory) ||
+                    (scenario.size == 8192 && scenario.stripes == 316 &&
+                     (scenario.primeCount == 16384 || scenario.primeCount == 32768) &&
+                     scenario.dynamicMemory);
+                if (!startupCandidate)
+                    continue;
+            }
+            if (scenario.dynamicMemory &&
+                (NSUInteger)scenario.size * sizeof(uint32_t) >
+                    miner->_device.maxThreadgroupMemoryLength) {
+                LOG_F(WARNING,
+                      "Sieve autotune: skipping SIZE=%u; requires %u bytes threadgroup memory",
+                      scenario.size, scenario.size * (uint32_t)sizeof(uint32_t));
+                continue;
+            }
+            @autoreleasepool {
+                const uint32_t stripes = scenario.stripes;
+                const uint32_t groups = (stripes / 2) * width;
+                std::vector<PrimePair> primes(scenario.primeCount);
+                for (uint32_t i = 0; i < scenario.primeCount; ++i) {
+                    uint32_t prime = gPrimes[13 + i];
+                    float reciprocal = 1.0f / (float)prime;
+                    primes[i].prime = prime;
+                    memcpy(&primes[i].reciprocal, &reciprocal, sizeof(reciprocal));
+                }
+
+                std::vector<uint32_t> offsets((size_t)scenario.primeCount * width);
+                std::vector<uint32_t> offsets2((size_t)scenario.primeCount * width);
+                for (uint32_t line = 0; line < width; ++line) {
+                    for (uint32_t i = 0; i < scenario.primeCount; ++i) {
+                        uint32_t prime = primes[i].prime;
+                        size_t offsetIndex = (size_t)line * scenario.primeCount + i;
+                        offsets[offsetIndex] =
+                            (uint32_t)(((uint64_t)(line + 1) * (i + 17)) % prime);
+                        offsets2[offsetIndex] = offsets[offsetIndex] == 0 ? 0 : prime - offsets[offsetIndex];
+                    }
+                }
+
+                uint32_t windowSize = scenario.size * 32;
+                uint32_t sieveRange1 = 0;
+                uint32_t sieveRange2 = 0;
+                uint32_t sieveRange3 = 0;
+                for (uint32_t i = 0; i < scenario.primeCount / lsize; ++i) {
+                    uint32_t prime = primes[i * lsize].prime;
+                    if (sieveRange1 == 0 && windowSize / prime <= 2) sieveRange1 = i;
+                    if (sieveRange2 == 0 && windowSize / prime <= 1) sieveRange2 = i;
+                    if (sieveRange3 == 0 && prime >= windowSize) sieveRange3 = i;
+                }
+                if (sieveRange2 == 0) sieveRange2 = scenario.primeCount / lsize;
+                if (sieveRange3 == 0) sieveRange3 = scenario.primeCount / lsize;
+
+                size_t outputWords = (size_t)scenario.size * groups;
+                id<MTLBuffer> outputBuffer = [miner->_device newBufferWithLength:outputWords * sizeof(uint32_t)
+                                                                       options:MTLResourceStorageModeShared];
+                id<MTLBuffer> outputBuffer2 = [miner->_device newBufferWithLength:outputWords * sizeof(uint32_t)
+                                                                        options:MTLResourceStorageModeShared];
+                id<MTLBuffer> offsetBuffer = [miner->_device newBufferWithBytes:offsets.data()
+                                                                      length:offsets.size() * sizeof(uint32_t)
+                                                                     options:MTLResourceStorageModeShared];
+                id<MTLBuffer> offsetBuffer2 = [miner->_device newBufferWithBytes:offsets2.data()
+                                                                       length:offsets2.size() * sizeof(uint32_t)
+                                                                      options:MTLResourceStorageModeShared];
+                id<MTLBuffer> primeBuffer = [miner->_device newBufferWithBytes:primes.data()
+                                                                     length:primes.size() * sizeof(PrimePair)
+                                                                    options:MTLResourceStorageModeShared];
+                const size_t maxCandidates = 128 * 1024;
+                id<MTLBuffer> found320 = [miner->_device newBufferWithLength:maxCandidates * sizeof(fermat_t)
+                                                                options:MTLResourceStorageModeShared];
+                id<MTLBuffer> found352 = [miner->_device newBufferWithLength:maxCandidates * sizeof(fermat_t)
+                                                                options:MTLResourceStorageModeShared];
+                id<MTLBuffer> candidateCounts = [miner->_device newBufferWithLength:2 * sizeof(uint32_t)
+                                                                      options:MTLResourceStorageModeShared];
+
+                if (!outputBuffer || !outputBuffer2 || !offsetBuffer || !offsetBuffer2 ||
+                    !primeBuffer || !found320 || !found352 || !candidateCounts) {
+                    LOG_F(WARNING,
+                          "Sieve %s: allocation failed for SIZE=%u STRIPES=%u PCOUNT=%u",
+                          autoTune ? "autotune" : "benchmark", scenario.size,
+                          stripes, scenario.primeCount);
+                    continue;
+                }
+
+                auto runSieve = [&]() {
+                    memset(candidateCounts.contents, 0, 2 * sizeof(uint32_t));
+                    id<MTLCommandBuffer> command = [miner->_commandQueue commandBuffer];
+                    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+                    id<MTLComputePipelineState> sievePipeline = scenario.dynamicMemory ?
+                        miner->_sieveDynamicPipeline : miner->_sievePipeline;
+                    [encoder setComputePipelineState:sievePipeline];
+                    if (scenario.dynamicMemory) {
+                        [encoder setThreadgroupMemoryLength:(NSUInteger)scenario.size * sizeof(uint32_t)
+                                                   atIndex:0];
+                    }
+                    [encoder setBuffer:outputBuffer offset:0 atIndex:0];
+                    [encoder setBuffer:offsetBuffer offset:0 atIndex:1];
+                    [encoder setBuffer:primeBuffer offset:0 atIndex:2];
+                    [encoder setBytes:&scenario.size length:sizeof(scenario.size) atIndex:3];
+                    [encoder setBytes:&stripes length:sizeof(stripes) atIndex:4];
+                    [encoder setBytes:&scenario.primeCount length:sizeof(scenario.primeCount) atIndex:5];
+                    [encoder setBytes:&sieveRange1 length:sizeof(sieveRange1) atIndex:6];
+                    [encoder setBytes:&sieveRange2 length:sizeof(sieveRange2) atIndex:7];
+                    [encoder setBytes:&sieveRange3 length:sizeof(sieveRange3) atIndex:8];
+                    [encoder setBytes:&scenario.primeCount length:sizeof(scenario.primeCount) atIndex:9];
+                    [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
+                                 threadsPerThreadgroup:MTLSizeMake(lsize, 1, 1)];
+
+                    [encoder setBuffer:outputBuffer2 offset:0 atIndex:0];
+                    [encoder setBuffer:offsetBuffer2 offset:0 atIndex:1];
+                    [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
+                                 threadsPerThreadgroup:MTLSizeMake(lsize, 1, 1)];
+
+                    uint32_t hashid = 0;
+                    uint32_t hashSize = 256;
+                    uint32_t depth = 4;
+                    uint32_t target = 10;
+                    [encoder setComputePipelineState:miner->_sieveSearchPipeline];
+                    [encoder setBuffer:outputBuffer offset:0 atIndex:0];
+                    [encoder setBuffer:outputBuffer2 offset:0 atIndex:1];
+                    [encoder setBuffer:found320 offset:0 atIndex:2];
+                    [encoder setBuffer:found352 offset:0 atIndex:3];
+                    [encoder setBuffer:candidateCounts offset:0 atIndex:4];
+                    [encoder setBytes:&hashid length:sizeof(hashid) atIndex:5];
+                    [encoder setBytes:&hashSize length:sizeof(hashSize) atIndex:6];
+                    [encoder setBytes:&depth length:sizeof(depth) atIndex:7];
+                    [encoder setBytes:&target length:sizeof(target) atIndex:8];
+                    [encoder setBytes:&width length:sizeof(width) atIndex:9];
+                    [encoder setBytes:&scenario.size length:sizeof(scenario.size) atIndex:10];
+                    [encoder setBytes:&stripes length:sizeof(stripes) atIndex:11];
+                    uint32_t searchGroups = (scenario.size * stripes / 2) / lsize;
+                    [encoder dispatchThreadgroups:MTLSizeMake(searchGroups, 1, 1)
+                                 threadsPerThreadgroup:MTLSizeMake(lsize, 1, 1)];
+                    [encoder endEncoding];
+
+                    auto start = std::chrono::steady_clock::now();
+                    [command commit];
+                    [command waitUntilCompleted];
+                    auto end = std::chrono::steady_clock::now();
+                    if (command.status != MTLCommandBufferStatusCompleted) {
+                        LOG_F(WARNING,
+                              "Sieve %s command failed for SIZE=%u STRIPES=%u PCOUNT=%u: %s",
+                              autoTune ? "autotune" : "benchmark", scenario.size,
+                              stripes, scenario.primeCount,
+                              command.error ?
+                                  [[command.error localizedDescription] UTF8String] : "unknown error");
+                        return -1.0;
+                    }
+                    return std::chrono::duration<double, std::milli>(end - start).count();
+                };
+
+                // The first scenario also warms GPU clocks and command submission,
+                // preventing startup order from biasing the safe baseline.
+                const unsigned warmupRuns = autoTune && !foundUsableScenario ? 12 : 1;
+                bool warmupFailed = false;
+                for (unsigned run = 0; run < warmupRuns; ++run) {
+                    if (runSieve() < 0.0) {
+                        warmupFailed = true;
+                        break;
+                    }
+                }
+                if (warmupFailed)
+                    continue;
+                if (runSieve() < 0.0)
+                    continue;
+                uint64_t firstDigest = digestWords((uint32_t*)outputBuffer.contents, outputWords) ^
+                                       digestWords((uint32_t*)outputBuffer2.contents, outputWords);
+                uint32_t firstCount320 = ((uint32_t*)candidateCounts.contents)[0];
+                uint32_t firstCount352 = ((uint32_t*)candidateCounts.contents)[1];
+                if (runSieve() < 0.0)
+                    continue;
+                uint64_t secondDigest = digestWords((uint32_t*)outputBuffer.contents, outputWords) ^
+                                        digestWords((uint32_t*)outputBuffer2.contents, outputWords);
+                uint32_t secondCount320 = ((uint32_t*)candidateCounts.contents)[0];
+                uint32_t secondCount352 = ((uint32_t*)candidateCounts.contents)[1];
+                if (firstDigest != secondDigest || firstCount320 != secondCount320 ||
+                    firstCount352 != secondCount352) {
+                    if (!autoTune)
+                        gBenchmarkFailed = true;
+                    if (autoTune) {
+                        LOG_F(WARNING, "Sieve SIZE=%u PCOUNT=%u determinism: FAILED",
+                              scenario.size, scenario.primeCount);
+                    } else {
+                        LOG_F(ERROR, "Sieve SIZE=%u PCOUNT=%u determinism: FAILED",
+                              scenario.size, scenario.primeCount);
+                    }
+                    continue;
+                }
+
+                bool baselineShape = scenario.size == 4096 && scenario.stripes == 210 &&
+                                     scenario.primeCount == 16384;
+                if (baselineShape && !scenario.dynamicMemory) {
+                    staticBaselineDigest = firstDigest;
+                    staticBaselineCount320 = firstCount320;
+                    staticBaselineCount352 = firstCount352;
+                } else if (baselineShape && scenario.dynamicMemory &&
+                           (firstDigest != staticBaselineDigest ||
+                            firstCount320 != staticBaselineCount320 ||
+                            firstCount352 != staticBaselineCount352)) {
+                    gBenchmarkFailed = true;
+                    LOG_F(ERROR, "Dynamic sieve equivalence with static SIZE=4096: FAILED");
+                    continue;
+                }
+
+                std::vector<double> timings;
+                bool timingFailed = false;
+                const unsigned timedRuns = autoTune ? 3 : 5;
+                for (unsigned run = 0; run < timedRuns; ++run) {
+                    double elapsed = runSieve();
+                    if (elapsed < 0.0) {
+                        timingFailed = true;
+                        break;
+                    }
+                    timings.push_back(elapsed);
+                }
+                if (timingFailed)
+                    continue;
+                double medianMs = medianMilliseconds(timings);
+                double primeGroups = (double)scenario.primeCount * groups;
+                double millionPrimeGroupsPerSecond = primeGroups / (medianMs * 1000.0);
+                double rangeMillions = (double)scenario.size * 32.0 * stripes / 1000000.0;
+                LOG_F(INFO, "Sieve[%s] SIZE=%u STRIPES=%u PCOUNT=%u range=%.1fM: PASS, %.3f ms, %.1f Mprime-groups/s, candidates=%u+%u, digest=%016llx",
+                      scenario.dynamicMemory ? "dynamic" : "static",
+                      scenario.size, stripes, scenario.primeCount, rangeMillions,
+                      medianMs, millionPrimeGroupsPerSecond,
+                      firstCount320, firstCount352,
+                      (unsigned long long)firstDigest);
+
+                if (autoTune) {
+                    // Account for downstream Fermat work instead of selecting on
+                    // sieve time alone. 4 Mtests/s is a conservative Apple-Silicon
+                    // baseline; candidate density dominates only close decisions.
+                    const uint64_t candidates =
+                        std::min<uint64_t>(firstCount320, maxCandidates) +
+                        std::min<uint64_t>(firstCount352, maxCandidates);
+                    const double estimatedFermatMs = (double)candidates / 4000.0;
+                    const double score = rangeMillions / (medianMs + estimatedFermatMs);
+                    LOG_F(INFO,
+                          "Sieve autotune candidate: SIZE=%u STRIPES=%u PCOUNT=%u score=%.3f",
+                          scenario.size, stripes, scenario.primeCount, score);
+                    if (!foundUsableScenario || score > bestScore) {
+                        foundUsableScenario = true;
+                        bestScore = score;
+                        bestScenario = scenario;
+                    }
+                }
+            }
+        }
+
+        if (autoTune) {
+            if (!foundUsableScenario) {
+                LOG_F(WARNING, "Sieve autotune found no usable scenario; keeping safe defaults");
+                return false;
+            }
+            miner->mConfig.SIZE = bestScenario.size;
+            miner->mConfig.STRIPES = bestScenario.stripes;
+            miner->mConfig.PCOUNT = bestScenario.primeCount;
+            LOG_F(INFO,
+                  "Sieve autotune selected SIZE=%u STRIPES=%u PCOUNT=%u (score %.3f)",
+                  bestScenario.size, bestScenario.stripes,
+                  bestScenario.primeCount, bestScore);
+        }
+        return true;
+    }
+}
+
 // Sieve performance benchmark (measures throughput)
 void metalSievePerfBenchmark(PrimeMiner* miner) {
-    @autoreleasepool {
-        // Not implemented - requires complete buffer initialization
-    }
+    if (!metalSieveEvaluate(miner, false))
+        gBenchmarkFailed = true;
 }
 
 // Comprehensive benchmark suite
@@ -1066,6 +2058,16 @@ void runMetalBenchmarks(id<MTLDevice> device, PrimeMiner* miner) {
 
         // 1. Multiply benchmarks (match HIP order)
         const uint32_t elementsNum = 65536;  // Match HIP
+        LOG_F(INFO, " *** UMULHI correctness and throughput ***");
+        metalUmulhiBenchmark(device, commandQueue,
+                             miner->_umulhiCorrectnessBenchmarkPipeline,
+                             miner->_umulhiThroughputBenchmarkPipeline);
+
+        LOG_F(INFO, " *** Cooperative big-integer feasibility test ***");
+        metalCooperativeMultiplyBenchmark(device, commandQueue,
+                                          miner->_multiplySingle320BenchmarkPipeline,
+                                          miner->_multiplySimdgroup320BenchmarkPipeline);
+
         LOG_F(INFO, " *** multiply benchmarks ***");
         metalMultiplyBenchmark(device, commandQueue, miner->_multiplyBenchmark320Pipeline,
                               320 / 32, elementsNum, false);
@@ -1084,6 +2086,17 @@ void runMetalBenchmarks(id<MTLDevice> device, PrimeMiner* miner) {
                                 miner->_fermatKernel320Pipeline,
                                 miner->_fermatKernel352Pipeline,
                                 262144);  // Same as HIP
+
+        LOG_F(INFO, " *** Fermat scheduling A/B test ***");
+        metalFermatSchedulingBenchmark(device, commandQueue,
+                                       miner->_fermatSetupPipeline,
+                                       miner->_fermatKernel320Pipeline,
+                                       miner->_fermatCheckPipeline);
+
+        LOG_F(INFO, " *** SIMD-group candidate compaction A/B test ***");
+        metalFermatCompactionBenchmark(device, commandQueue,
+                                       miner->_fermatCheckPipeline,
+                                       miner->_fermatCheckSimdPipeline);
 
         // 4. Hashmod benchmark
         metalHashmodBenchmark(miner);
@@ -1127,8 +2140,14 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         }
 
         for (int k = 0; k < 2; ++k) {
-            mSieveBuf[k].init(_device, mConfig.SIZE * mConfig.STRIPES / 2 * mConfig.WIDTH);
-            mSieveOff[k].init(_device, mConfig.PCOUNT * mConfig.WIDTH);
+            const size_t sieveWords =
+                (size_t)mConfig.SIZE * mConfig.STRIPES / 2 * mConfig.WIDTH;
+            const size_t offsetWords = (size_t)mConfig.PCOUNT * mConfig.WIDTH;
+            if (!mSieveBuf[k].init(_device, sieveWords) ||
+                !mSieveOff[k].init(_device, offsetWords)) {
+                LOG_F(ERROR, "GPU %d: Failed to allocate sieve buffers", mID);
+                return;
+            }
         }
 
         final.info.init(_device, MFS / (4 * mDepth));
@@ -1179,7 +2198,9 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         time_t timeValidationLog = time(0);
         uint64_t testCount = 0;
         uint64_t fermatCount = 0;
+        uint64_t gpuPrefixMismatchCount = 0;
         unsigned numHashCoeff = 32768;  // Adaptive hash generation coefficient (matches HIP)
+        const unsigned maxNumHashCoeff = 8 * 1024 * 1024;
 
         // Hash buffer and primorial array
         lifoBuffer<hash_t> hashes(PW);
@@ -1315,10 +2336,13 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             // Adaptive hash generation - matches HIP
             int numhash = ((int)(16 * mSievePerRound) - (int)hashes.remaining()) * numHashCoeff;
             if (numhash < 0) numhash = 0;  // Safety check
+            const NSUInteger jsonThreadgroupSize =
+                std::min<NSUInteger>(256, [_jsonHashModPipeline maxTotalThreadsPerThreadgroup]);
 
             // Only align if we have work to do
             if (numhash > 0) {
-                numhash += mLSize - numhash % mLSize;  // Align to threadgroup size
+                numhash = ((numhash + (int)jsonThreadgroupSize - 1) / (int)jsonThreadgroupSize) *
+                          (int)jsonThreadgroupSize;
             }
 
             // Only dispatch hash kernel if we need more hashes
@@ -1345,8 +2369,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
             // Encode jsonHashMod kernel
             if (gDebug) {
-                LOG_F(INFO, "GPU %d: Dispatching jsonHashMod kernel (numhash=%d, threadgroup=%u)",
-                      mID, numhash, mLSize);
+                LOG_F(INFO, "GPU %d: Dispatching jsonHashMod kernel (numhash=%d, threadgroup=%lu)",
+                      mID, numhash, (unsigned long)jsonThreadgroupSize);
             }
             [encoder setComputePipelineState:_jsonHashModPipeline];
             [encoder setBytes:&nonce length:sizeof(uint64_t) atIndex:0];
@@ -1362,7 +2386,7 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             [encoder setBytes:&mConfig.LIMIT15 length:sizeof(uint32_t) atIndex:10];
 
             MTLSize gridSize = MTLSizeMake(numhash, 1, 1);
-            MTLSize threadgroupSize = MTLSizeMake(mLSize, 1, 1);
+            MTLSize threadgroupSize = MTLSizeMake(jsonThreadgroupSize, 1, 1);
             [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
 
             [encoder endEncoding];
@@ -1481,7 +2505,7 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                     // Create hash_t and add to buffer
                     hash_t hash;
                     hash.iter = iteration;
-                    hash.nonce = (uint32_t)candidateNonce;
+                    hash.nonce = candidateNonce;
                     hash.time = 0;  // Not used in getwork mode
                     hash.hash = hash256;
                     hash.primorialIdx = adjustedIdx;
@@ -1555,7 +2579,7 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                 if (hashes.empty()) {
                     if (!hasChanged) {  // Don't increase on new work (matches HIP's "if (!reset)")
-                        numHashCoeff += 32768;
+                        numHashCoeff = std::min(numHashCoeff + 32768, maxNumHashCoeff);
                         LOG_F(WARNING, "GPU %d: Ran out of hashes, increasing sha256 work size coefficient to %u",
                               mID, numHashCoeff);
                     }
@@ -1719,8 +2743,15 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                           mSieveOff[1][5], mSieveOff[1][6], mSieveOff[1][7], mSieveOff[1][8], mSieveOff[1][9]);
                 }
 
-                // 2. Single-pass sieve (SIZE=4096 fits in 16KB threadgroup memory)
-                [encoder setComputePipelineState:_sievePipeline];
+                // 2. Single-pass sieve. Larger geometries use explicit dynamic
+                // threadgroup memory; the fixed kernel remains the default path.
+                const bool useDynamicSieve = mConfig.SIZE > 4096;
+                [encoder setComputePipelineState:useDynamicSieve ?
+                    _sieveDynamicPipeline : _sievePipeline];
+                if (useDynamicSieve) {
+                    [encoder setThreadgroupMemoryLength:
+                        (NSUInteger)mConfig.SIZE * sizeof(uint32_t) atIndex:0];
+                }
 
                 MTLSize sieveGrid = MTLSizeMake((mConfig.STRIPES / 2) * mConfig.WIDTH, 1, 1);
                 MTLSize sieveThreadgroup = MTLSizeMake(mLSize, 1, 1);
@@ -1785,6 +2816,12 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                     // Without waiting, they run in parallel and overwrite each other's data
                     // This matches HIP's sequential execution using a single stream
                     [sieveCommandBuffer waitUntilCompleted];
+                    if (sieveCommandBuffer.status == MTLCommandBufferStatusError) {
+                        LOG_F(ERROR, "GPU %d: Sieve command failed: %s", mID,
+                              [[sieveCommandBuffer.error localizedDescription] UTF8String]);
+                        MakeExit = true;
+                        return;
+                    }
 
                     // Debug: Check sieve output for first hash
                     if (gDebug && i == 0 && hid == 0) {
@@ -1963,8 +3000,22 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                 // Set candidate type for CPU validation (matches HIP line 1742)
                 testParams.nCandidateType = candi.type + 1;
 
-                // Test chain (use mDepth as base to continue from where GPU left off - matches HIP line 1743)
-                bool isblock = ProbablePrimeChainTestFastCuda(origin, testParams, mDepth);
+                // Recheck the complete chain before submission. Starting at mDepth
+                // trusts the GPU-tested prefix and can submit a false positive if
+                // candidate metadata is stale or a GPU Fermat result is incorrect.
+                bool isblock = ProbablePrimeChainTestFastCuda(origin, testParams, 0);
+                if (TargetGetLength(testParams.nChainLength) < mDepth) {
+                    gpuPrefixMismatchCount++;
+                    if (gDebug && (gpuPrefixMismatchCount <= 5 ||
+                        (gpuPrefixMismatchCount % 100) == 0)) {
+                        LOG_F(WARNING,
+                              "GPU %d: Final candidate failed independent CPU prefix validation "
+                              "(count=%llu, GPU depth=%u, CPU chain=%s, type=%u, hashid=%u)",
+                              mID, (unsigned long long)gpuPrefixMismatchCount, mDepth,
+                              TargetToString(testParams.nChainLength).c_str(),
+                              candi.type, candi.hashid);
+                    }
+                }
 
                 // Log detailed validation only in debug mode
                 if (gDebug && i < 10) {
@@ -2033,6 +3084,17 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                                 // Calculate target multiplier = primorial * multi (matches HIP line 1500)
                                 mpz_class targetMultiplier = hash.primorial * multi;
 
+                                mpz_class submittedHash;
+                                mpz_set_uint256(submittedHash.get_mpz_t(), hash.hash);
+                                if (submittedHash * targetMultiplier != origin) {
+                                    LOG_F(ERROR,
+                                          "GPU %d: Refusing inconsistent share submission "
+                                          "(height=%llu, nonce=%llu, hashid=%u)",
+                                          mID, (unsigned long long)currentWork.height,
+                                          (unsigned long long)hash.nonce, candi.hashid);
+                                    continue;
+                                }
+
                                 // Submit work
                                 submitted = ctx->submitWork(currentWork, hash.nonce, targetMultiplier);
 
@@ -2052,7 +3114,7 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                         std::string chainName = GetPrimeChainName(testParams.nCandidateType, testParams.nChainLength);
                         const char* submitStatus;
                         if (shouldSubmit) {
-                            submitStatus = submitted ? "yes" : "failed";
+                            submitStatus = submitted ? "queued" : "not queued";
                         } else {
                             if (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) {
                                 submitStatus = "skipped (BiTwin but shouldn't happen)";
@@ -2060,7 +3122,9 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                                 submitStatus = gSubmitAllChains ? "skipped (unknown type)" : "skipped (not BiTwin, use --submit-all-chains)";
                             }
                         }
-                        LOG_F(1, "GPU %d found share: %s (submitted: %s)", mID, chainName.c_str(), submitStatus);
+                        LOG_F(1, "GPU %d found share: %s (submitted: %s, nonce=%llu)",
+                              mID, chainName.c_str(), submitStatus,
+                              (unsigned long long)hash.nonce);
 
                         // Log block found for ALL chains (matches HIP format at line 1539-1544)
                         if (isblock) {
@@ -2190,6 +3254,11 @@ bool createTestDumpDir(int roundNum) {
 int main(int argc, char** argv) {
     // Parse command-line arguments
     bool runBenchmark = false;
+    enum {
+        OPT_METAL_SIEVE_WORDS = 1000,
+        OPT_METAL_STRIPES,
+        OPT_NO_METAL_AUTOTUNE
+    };
     static struct option longOptions[] = {
         {"url", required_argument, 0, 'u'},
         {"debug", no_argument, 0, 'd'},
@@ -2198,6 +3267,9 @@ int main(int argc, char** argv) {
         {"weave-depth", required_argument, 0, 'w'},
         {"extensions-num", required_argument, 0, 'e'},
         {"prime-count", required_argument, 0, 'P'},
+        {"metal-sieve-words", required_argument, 0, OPT_METAL_SIEVE_WORDS},
+        {"metal-stripes", required_argument, 0, OPT_METAL_STRIPES},
+        {"no-metal-autotune", no_argument, 0, OPT_NO_METAL_AUTOTUNE},
         {"benchmark", no_argument, 0, 'b'},
         {"test-dump", required_argument, 0, 'D'},
         {"test-json", required_argument, 0, 'J'},
@@ -2216,7 +3288,19 @@ int main(int argc, char** argv) {
             case 's': gSieveSize = atoi(optarg); break;
             case 'w': gWeaveDepth = atoi(optarg); break;
             case 'e': gExtensionsNum = atoi(optarg); break;
-            case 'P': gPrimeCount = atoi(optarg); break;
+            case 'P':
+                gPrimeCount = atoi(optarg);
+                gMetalConfigExplicit = true;
+                break;
+            case OPT_METAL_SIEVE_WORDS:
+                gMetalSieveWords = atoi(optarg);
+                gMetalConfigExplicit = true;
+                break;
+            case OPT_METAL_STRIPES:
+                gMetalStripes = atoi(optarg);
+                gMetalConfigExplicit = true;
+                break;
+            case OPT_NO_METAL_AUTOTUNE: gMetalAutoTune = false; break;
             case 'b': runBenchmark = true; break;
             case 'A': gSubmitAllChains = true; break;
             case 'D':
@@ -2238,8 +3322,11 @@ int main(int argc, char** argv) {
                 printf("  -s, --sieve-size <n>        Sieve size (default: 10)\n");
                 printf("  -w, --weave-depth <n>       Weave depth (default: 8192)\n");
                 printf("  -e, --extensions-num <n>    Extensions number (default: 9)\n");
-                printf("  -P, --prime-count <n>       Prime count for sieving (default: 16384)\n");
+                printf("  -P, --prime-count <n>       Prime count; disables startup autotuning\n");
                 printf("                              Try: 8192, 16384, 32768, or 65536\n");
+                printf("      --metal-sieve-words <n> Metal sieve words: 4096 or 8192; disables autotuning\n");
+                printf("      --metal-stripes <n>     Even stripe count; disables autotuning\n");
+                printf("      --no-metal-autotune     Use safe defaults: 4096/210/16384\n");
                 printf("  -b, --benchmark             Run performance benchmarks to measure GPU speed\n");
                 printf("  -A, --submit-all-chains     [EXPERIMENTAL] Submit all chain types (Cunningham1,\n");
                 printf("                              Cunningham2, BiTwin) instead of only BiTwin chains\n");
@@ -2252,6 +3339,19 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "Try 'xpmmetal --help' for more information.\n");
                 return 1;
         }
+    }
+
+    if (gMetalSieveWords != 4096 && gMetalSieveWords != 8192) {
+        fprintf(stderr, "Error: --metal-sieve-words must be 4096 or 8192\n");
+        return 1;
+    }
+    if (gMetalStripes <= 0 || gMetalStripes > 630 || (gMetalStripes & 1) != 0) {
+        fprintf(stderr, "Error: --metal-stripes must be an even number from 2 to 630\n");
+        return 1;
+    }
+    if (gPrimeCount < 8192 || gPrimeCount > 65536 || (gPrimeCount % 1024) != 0) {
+        fprintf(stderr, "Error: --prime-count must be 8192..65536 and divisible by 1024\n");
+        return 1;
     }
 
     // Test mode validation
@@ -2342,7 +3442,11 @@ int main(int argc, char** argv) {
             // Run comprehensive benchmarks
             runMetalBenchmarks(device, &miner);
 
-            LOG_F(INFO, "Benchmarks complete.");
+            if (gBenchmarkFailed) {
+                LOG_F(ERROR, "Benchmarks completed with correctness failures.");
+                return 1;
+            }
+            LOG_F(INFO, "Benchmarks complete; all correctness checks passed.");
             return 0;
         }
 
@@ -2364,6 +3468,20 @@ int main(int argc, char** argv) {
         if (!miner.Initialize(device)) {
             LOG_F(ERROR, "Failed to initialize miner");
             return 1;
+        }
+
+        const bool shouldAutoTune = gMetalAutoTune && !gMetalConfigExplicit && !gTestMode;
+        if (shouldAutoTune) {
+            LOG_F(INFO, "Running safe Metal sieve startup autotune...");
+            if (!metalSieveEvaluate(&miner, true)) {
+                LOG_F(ERROR,
+                      "Metal sieve autotune could not run the safe baseline; refusing to start mining");
+                return 1;
+            }
+        } else if (gMetalConfigExplicit) {
+            LOG_F(INFO, "Metal sieve autotune disabled by explicit configuration");
+        } else if (!gMetalAutoTune) {
+            LOG_F(INFO, "Metal sieve autotune disabled; using safe defaults");
         }
 
         // DEBUGGING: Pause before mining to allow debugger attachment

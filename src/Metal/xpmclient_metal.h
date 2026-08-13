@@ -161,7 +161,7 @@ public:
     // Hash candidate structure
     struct hash_t {
         unsigned iter;
-        unsigned nonce;
+        uint64_t nonce;
         unsigned time;
         uint256 hash;
         mpz_class shash;
@@ -196,6 +196,7 @@ public:
 
     // Allow benchmark functions to access private members
     friend void runMetalBenchmarks(id<MTLDevice> device, PrimeMiner* miner);
+    friend bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune);
     friend void metalSievePerfBenchmark(PrimeMiner* miner);
     friend void metalSieveCheckBenchmark(PrimeMiner* miner);
     friend void metalHashmodBenchmark(PrimeMiner* miner);
@@ -232,17 +233,23 @@ private:
     id<MTLComputePipelineState> _jsonHashModPipeline;
     id<MTLComputePipelineState> _sieveSetupPipeline;
     id<MTLComputePipelineState> _sievePipeline;
+    id<MTLComputePipelineState> _sieveDynamicPipeline;
     id<MTLComputePipelineState> _sieveSearchPipeline;
     id<MTLComputePipelineState> _fermatSetupPipeline;
     id<MTLComputePipelineState> _fermatKernel352Pipeline;
     id<MTLComputePipelineState> _fermatKernel320Pipeline;
     id<MTLComputePipelineState> _fermatCheckPipeline;
+    id<MTLComputePipelineState> _fermatCheckSimdPipeline;
 
     // Benchmark pipeline states
     id<MTLComputePipelineState> _multiplyBenchmark320Pipeline;
     id<MTLComputePipelineState> _multiplyBenchmark352Pipeline;
     id<MTLComputePipelineState> _squareBenchmark320Pipeline;
     id<MTLComputePipelineState> _squareBenchmark352Pipeline;
+    id<MTLComputePipelineState> _umulhiCorrectnessBenchmarkPipeline;
+    id<MTLComputePipelineState> _umulhiThroughputBenchmarkPipeline;
+    id<MTLComputePipelineState> _multiplySingle320BenchmarkPipeline;
+    id<MTLComputePipelineState> _multiplySimdgroup320BenchmarkPipeline;
 
     // JSON getwork mode buffers
     MetalBuffer<uint32_t> mJsonMidstateBuf;         // JSON SHA256 midstate

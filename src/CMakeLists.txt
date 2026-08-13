@@ -3,7 +3,15 @@ project(xpmminer)
 
 option(DEBUG_MINING_AMD_OPENCL "Print performance counters")
 option(BUILDCPUMINER "build CPU miner" ON)
-option(BUILDOPENCLMINER "build OpenCL miner" ON)
+
+# Automatically disable OpenCL on macOS (deprecated, use Metal instead)
+if(APPLE)
+    option(BUILDOPENCLMINER "build OpenCL miner" OFF)
+    message(STATUS "OpenCL miner disabled on macOS (deprecated). Use Metal miner instead.")
+else()
+    option(BUILDOPENCLMINER "build OpenCL miner" ON)
+endif()
+
 option(BUILDCUDAMINER "build CUDA miner" ON)
 option(BUILDHIPMINER "build HIP miner (for AMD GPUs via ROCm)" ON)
 option(BUILDMETALMINER "build Metal miner (for Apple Silicon)" ON)

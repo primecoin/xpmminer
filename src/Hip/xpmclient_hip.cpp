@@ -2396,7 +2396,8 @@ int main(int argc, char** argv) {
     static char defineLimit13[64], defineLimit14[64], defineLimit15[64];
     static char defineSieveRange1[64], defineSieveRange2[64],
         defineSieveRange3[64];
-    static char includePathBuf1[256], includePathBuf2[256];
+    static char includePathBuf1[256], includePathBuf2[256],
+        includePathBuf3[256];
 
     sprintf(defineStripes, "-DSTRIPES=%u", clKernelStripes);
     sprintf(defineWidth, "-DWIDTH=%u", clKernelWidth);
@@ -2413,6 +2414,7 @@ int main(int argc, char** argv) {
     sprintf(defineSieveRange3, "-DSIEVERANGE3=%u", ranges[2]);
     sprintf(includePathBuf1, "-Ixpm/cuda");
     sprintf(includePathBuf2, "-I../src/Hip");
+    sprintf(includePathBuf3, "-I/opt/rocm/include");
 
     std::vector<hipModule_t> modules;
     modules.resize(gpus.size());
@@ -2435,6 +2437,7 @@ int main(int argc, char** argv) {
             // COMPLETED: Confirmed no VGPR spilling
             includePathBuf1, // xpm/cuda for kernel source files
             includePathBuf2, // ../src/Hip for header files
+            includePathBuf3, // ROCm include path (required in ROCm 7.x)
             defineStripes,
             defineWidth,
             definePCount,
@@ -2459,7 +2462,7 @@ int main(int argc, char** argv) {
                  "xpm/cuda/json_sha256_hip.cpp",
                  "xpm/cuda/benchmarks_kernels_hip.cpp"},
                 options,
-                16, // 1 architecture + 2 include paths + 13 define flags
+                17, // 1 architecture + 3 include paths + 13 define flags
                 &modules[i],
                 gpus[i].majorComputeCapability,
                 gpus[i].minorComputeCapability,
