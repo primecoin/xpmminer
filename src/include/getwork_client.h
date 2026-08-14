@@ -23,6 +23,13 @@ public:
 #endif
 
 private:
+    enum class ConnectionState {
+        Disconnected,
+        Connecting,
+        Connected,
+        Disconnecting,
+    };
+
     void* _log;
     std::string _wsUrl;           // ws://host:port/path
     std::string _host;            // Parsed hostname
@@ -30,22 +37,35 @@ private:
     int _port;                    // Parsed port
 
 #ifdef HAVE_LIBWEBSOCKETS
+    struct ServiceTimer {
+        lws_sorted_usec_list_t sul;
+        GetWorkContext* owner;
+    };
+
     struct lws_context* _wsContext;
     struct lws* _wsi;
+    ServiceTimer _serviceTimer;
 #endif
 
     pthread_mutex_t _mutex;
     pthread_t _thread;
+    bool _threadStarted;
+    bool _stopRequested;
 
     JsonWork _currentWork;
     uint64_t _workId;             // increments on new work
-    bool _connected;
+    ConnectionState _connectionState;
     bool _hasWork;
+    bool _hasSubmittedForWork;   // Allow only one in-flight solution per work ID
+    uint64_t _submittedWorkId;
+    int _submittedRpcId;
     bool _needsRefresh;           // Flag to force work refresh
     bool _hasPendingWrites;       // Flag to signal pending writes (thread-safe)
     bool _pendingGetwork;         // Flag for high-priority getwork request
     time_t _lastMessageTime;      // Track last received message for timeout detection
     time_t _lastSubmitTime;       // Track last submit time for throttling
+    time_t _lastRequestTime;      // Track periodic getwork scheduling
+    time_t _lastReconnectAttempt; // Bound reconnect attempts
 
     // JSON-RPC request ID counter
     int _rpcId;
@@ -57,7 +77,11 @@ private:
     void onMessage(const char* data, size_t len);
     void sendGetWork();
     void sendGetWorkInternal(struct lws* wsi);  // Internal version called from callback
+    void handleDisconnect(struct lws* wsi, const char* message);
     void attemptReconnect();  // Try to reconnect to WebSocket server
+#ifdef HAVE_LIBWEBSOCKETS
+    static void serviceTimerCallback(lws_sorted_usec_list_t* sul);
+#endif
     static void* runThread(void* arg);
 
 public:

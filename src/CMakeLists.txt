@@ -1,4 +1,14 @@
 cmake_minimum_required(VERSION 3.16)
+
+# Keep release binaries compatible with macOS 15 and later. This must be set
+# before project() so CMake applies the deployment target during compiler
+# detection as well as compilation and linking. Callers can still select a
+# different target explicitly with -DCMAKE_OSX_DEPLOYMENT_TARGET=<version>.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING
+      "Minimum macOS version supported by the build" FORCE)
+endif()
+
 project(xpmminer)
 
 option(DEBUG_MINING_AMD_OPENCL "Print performance counters")

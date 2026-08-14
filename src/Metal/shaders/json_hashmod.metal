@@ -272,9 +272,16 @@ kernel void jsonHashMod(
 {
     ulong nonce = nonceOffset + tid;
 
-    // Build complete JSON message in thread-local buffer
-    uchar message[256];  // Increased from 128 to handle worst-case JSON prefix
+    // prepareJsonMidstate prehashes every complete fixed-prefix block, leaving
+    // at most 63 prefix bytes plus 20 nonce digits and the closing brace.
+    // Keeping this scratch array small reduces each hashing thread's register /
+    // stack footprint on Apple GPUs.
+    uchar message[96];
     uint msgLen = 0;
+
+    if (remainingLen >= 64) {
+        return;
+    }
 
     // Copy remaining prefix
     for (uint i = 0; i < remainingLen; i++) {
@@ -292,7 +299,7 @@ kernel void jsonHashMod(
     message[msgLen++] = '}';
 
     // Safety check: skip malformed/oversized messages
-    if (msgLen > 200) {
+    if (msgLen > 84) {
         return;
     }
 

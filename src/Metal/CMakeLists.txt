@@ -95,6 +95,14 @@ set(METAL_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/benchmarks.metal
 )
 
+# Match the shader library's deployment target to the host executable. Without
+# this, recent Metal toolchains default to the build machine's macOS version.
+set(METAL_DEPLOYMENT_TARGET_ARGS "")
+if(CMAKE_OSX_DEPLOYMENT_TARGET)
+    list(APPEND METAL_DEPLOYMENT_TARGET_ARGS
+        "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
+
 # Compile Metal shaders to .air intermediate files
 set(METAL_AIR_FILES "")
 foreach(SHADER_FILE ${METAL_SHADER_SOURCES})
@@ -109,7 +117,8 @@ foreach(SHADER_FILE ${METAL_SHADER_SOURCES})
         # installed toolchain.  Supplying -sdk macosx can select the legacy
         # XcodeDefault launcher instead of that toolchain, even when the
         # component is installed and visible to xcrun.
-        COMMAND xcrun metal -c ${SHADER_FILE} -o ${AIR_FILE}
+        COMMAND xcrun metal ${METAL_DEPLOYMENT_TARGET_ARGS}
+            -c ${SHADER_FILE} -o ${AIR_FILE}
         DEPENDS ${SHADER_FILE}
         COMMENT "Compiling Metal shader: ${SHADER_NAME}.metal"
     )

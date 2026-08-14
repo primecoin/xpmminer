@@ -54,6 +54,13 @@ public:
      * @return true if successful, false otherwise
      */
     bool init(id<MTLDevice> device, size_t size, bool hostNoAccess = false) {
+        // Autotuning may benchmark several complete mining configurations on
+        // one PrimeMiner instance. Release the previous backing storage before
+        // resizing so repeated initialization does not leak host memory.
+        delete[] _hostData;
+        _hostData = nullptr;
+        _deviceBuffer = nil;
+
         _device = device;
         _size = size;
 

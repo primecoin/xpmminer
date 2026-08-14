@@ -51,8 +51,8 @@ struct config_t {
 
 constant uint N_HASH_LIMBS = 12;  // Default number of hash limbs
 
-// Sieve size constant - MUST match mConfig.SIZE in xpmclient_metal.mm
-// Set to 4096 (16KB) - Metal only allocates 16KB threadgroup memory (verified via staticThreadgroupMemoryLength)
+// Fixed-kernel sieve size. Larger configurations use sieve_dynamic with an
+// explicit threadgroup-memory allocation selected by the host.
 #ifndef METAL_SIEVE_SIZE
 #define METAL_SIEVE_SIZE 4096
 #endif
@@ -98,16 +98,16 @@ constant uint SMALL_PRIMES[20] = {
     31, 37, 41, 43, 47, 53, 59, 61, 67, 71
 };
 
-// Sieve constants for 1024 threads per threadgroup (LSIZELOG2 == 10)
-// Matches CUDA default configuration for optimal performance
-constant uint LSIZE = 1024;
-constant uint LSIZELOG2 = 10;
+// The host specializes the sieve pipeline for the selected threadgroup size.
+// This keeps the hot address arithmetic compile-time constant while allowing
+// older Apple GPUs to use their 512-thread limit correctly.
+constant uint SIEVE_LSIZE_LOG2 [[function_constant(0)]];
 constant uint NLIFO = 4;  // LIFO buffer depth for prime prefetching
 
-// Batch sizes for phase 1 sieving (for 1024 threads)
-// These control how many threads process each batch of primes
-constant uint nps_all[8] = { 4, 4, 5, 6, 7, 7, 7, 9 };
-constant uint S1RUNS = 8;  // Number of batches
+// Batch sizes match the CUDA/HIP schedules for each supported size.
+constant uint SIEVE_NPS_1024[8] = { 4, 4, 5, 6, 7, 7, 7, 9 };
+constant uint SIEVE_NPS_512[9] = { 3, 3, 4, 5, 6, 6, 6, 7, 7 };
+constant uint SIEVE_NPS_256[9] = { 2, 2, 3, 4, 5, 5, 5, 6, 6 };
 
 // Helper function: byte swap for endianness conversion
 inline uint bswap32(uint x) {

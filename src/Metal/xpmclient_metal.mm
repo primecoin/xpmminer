@@ -17,6 +17,7 @@
 #include <chrono>
 #include <algorithm>
 #include <set>
+#include <unistd.h>
 #include <openssl/bn.h>
 
 // Include these last to avoid macro conflicts
@@ -35,6 +36,7 @@ int gPrimeCount = 16384;
 int gMetalSieveWords = 4096;
 int gMetalStripes = 210;
 static bool gMetalAutoTune = true;
+static bool gMetalMiningAutoTune = false;
 static bool gMetalConfigExplicit = false;
 
 static uint32_t metalSieveTileCount(uint32_t logicalWords) {
@@ -46,7 +48,7 @@ static uint32_t metalSieveTileWords(uint32_t logicalWords) {
 }
 
 static const char* gWsUrl = nullptr;
-static const char* gProtocol = "getwork";
+static const char* gProtocol = "getblocktemplate";
 static const char* gRpcUrl = "127.0.0.1:9912";
 static const char* gRpcUser = nullptr;
 static const char* gRpcPassword = nullptr;
@@ -79,33 +81,24 @@ void prepareJsonMidstate(const JsonWork& work, JsonMidstateData* data) {
 
     data->totalPrefixLen = len;
 
-    // Compute SHA256 midstate after first 128 bytes (2 blocks)
-    if (len >= 128) {
-        SHA_256 ctx;
-        ctx.init();
-        ctx.update((uint8_t*)prefix, 128);
-
-        // Store midstate
-        for (int i = 0; i < 8; i++) {
-            data->midstate[i] = ctx.m_h[i];
-        }
-
-        // Store remaining bytes
-        data->remainingLen = len - 128;
-        memcpy(data->remainingPrefix, prefix + 128, data->remainingLen);
-    } else {
-        // If less than 128 bytes, use correct SHA256 initial state values
-        data->midstate[0] = 0x6a09e667;
-        data->midstate[1] = 0xbb67ae85;
-        data->midstate[2] = 0x3c6ef372;
-        data->midstate[3] = 0xa54ff53a;
-        data->midstate[4] = 0x510e527f;
-        data->midstate[5] = 0x9b05688c;
-        data->midstate[6] = 0x1f83d9ab;
-        data->midstate[7] = 0x5be0cd19;
-        data->remainingLen = len;
-        memcpy(data->remainingPrefix, prefix, len);
+    // Everything before the nonce is constant for this work item. Prehash all
+    // complete SHA-256 blocks, rather than stopping after two blocks. The
+    // canonical get-work prefix is normally long enough for three blocks, so
+    // this removes one compression from every GPU nonce while guaranteeing
+    // that the remaining prefix is shorter than a block.
+    const size_t processedLen = (size_t)len & ~(size_t)63;
+    SHA_256 ctx;
+    ctx.init();
+    if (processedLen != 0) {
+        ctx.update((uint8_t*)prefix, processedLen);
     }
+
+    for (int i = 0; i < 8; i++) {
+        data->midstate[i] = ctx.m_h[i];
+    }
+
+    data->remainingLen = (uint32_t)((size_t)len - processedLen);
+    memcpy(data->remainingPrefix, prefix + processedLen, data->remainingLen);
 }
 
 static void bytesToHex(const void* data, size_t size, char* output) {
@@ -150,6 +143,12 @@ mLSize = LSize;
     _sieveSetupPipeline = nil;
     _sievePipeline = nil;
     _sieveDynamicPipeline = nil;
+    _sievePipeline256 = nil;
+    _sieveDynamicPipeline256 = nil;
+    _sievePipeline512 = nil;
+    _sieveDynamicPipeline512 = nil;
+    _sievePipeline1024 = nil;
+    _sieveDynamicPipeline1024 = nil;
     _sieveSearchPipeline = nil;
     _fermatSetupPipeline = nil;
     _fermatKernel352Pipeline = nil;
@@ -164,6 +163,30 @@ mLSize = LSize;
 
 PrimeMiner::~PrimeMiner() {
     // ARC will handle Metal object cleanup
+}
+
+bool PrimeMiner::SelectSieveLSize(unsigned lsize) {
+    switch (lsize) {
+        case 256:
+            _sievePipeline = _sievePipeline256;
+            _sieveDynamicPipeline = _sieveDynamicPipeline256;
+            break;
+        case 512:
+            _sievePipeline = _sievePipeline512;
+            _sieveDynamicPipeline = _sieveDynamicPipeline512;
+            break;
+        case 1024:
+            _sievePipeline = _sievePipeline1024;
+            _sieveDynamicPipeline = _sieveDynamicPipeline1024;
+            break;
+        default:
+            return false;
+    }
+
+    if (!_sievePipeline || !_sieveDynamicPipeline)
+        return false;
+    mLSize = lsize;
+    return true;
 }
 
 void PrimeMiner::FermatInit(pipeline_t& fermat, unsigned mfs) {
@@ -628,6 +651,12 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         LOG_F(INFO, "Max threadgroup memory: %lu bytes",
               (unsigned long)device.maxThreadgroupMemoryLength);
 
+        // 512 is supported everywhere and is the safe starting point. Startup
+        // autotuning compares it with 1024 when the device supports both.
+        mLSize = 512;
+        if (gDebug)
+            LOG_F(INFO, "Initial Metal sieve LSIZE=%u", mLSize);
+
         // Create command queue
         _commandQueue = [device newCommandQueue];
         if (!_commandQueue) {
@@ -735,6 +764,50 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         auto createPipeline = [&] (NSString* name) -> id<MTLComputePipelineState> {
             return createPipelineFromLibrary(_library, name);
         };
+        auto createSievePipeline = [&] (
+            NSString* name, uint32_t lsize) -> id<MTLComputePipelineState> {
+            MTLFunctionConstantValues* values = [MTLFunctionConstantValues new];
+            uint32_t lsizeLog2 = 0;
+            for (uint32_t value = lsize; value > 1; value >>= 1)
+                ++lsizeLog2;
+            [values setConstantValue:&lsizeLog2
+                                type:MTLDataTypeUInt
+                             atIndex:0];
+            NSError* functionError = nil;
+            id<MTLFunction> function =
+                [jsonHashLibrary newFunctionWithName:name
+                                      constantValues:values
+                                               error:&functionError];
+            if (!function) {
+                LOG_F(ERROR, "Failed to specialize sieve function %s for LSIZE=%u: %s",
+                      [name UTF8String], lsize,
+                      [[functionError localizedDescription] UTF8String]);
+                return nil;
+            }
+
+            // Compile each dispatch size with a matching occupancy target.
+            // Apple documents this descriptor value as a compiler tuning hint;
+            // leaving it at zero can optimize every variant for the device's
+            // maximum even though a smaller threadgroup is always dispatched.
+            MTLComputePipelineDescriptor* descriptor =
+                [MTLComputePipelineDescriptor new];
+            descriptor.computeFunction = function;
+            descriptor.maxTotalThreadsPerThreadgroup = lsize;
+            descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth = YES;
+            NSError* pipelineError = nil;
+            id<MTLComputePipelineState> pipeline =
+                [device newComputePipelineStateWithDescriptor:descriptor
+                                                      options:MTLPipelineOptionNone
+                                                   reflection:nil
+                                                        error:&pipelineError];
+            if (!pipeline) {
+                LOG_F(ERROR,
+                      "Failed to create specialized sieve pipeline %s for LSIZE=%u: %s",
+                      [name UTF8String], lsize,
+                      [[pipelineError localizedDescription] UTF8String]);
+            }
+            return pipeline;
+        };
 
         _jsonHashModPipeline =
             createPipelineFromLibrary(jsonHashLibrary, @"jsonHashMod");
@@ -744,9 +817,19 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
             createPipelineFromLibrary(jsonHashLibrary, @"blockHashDebug");
         _sieveSetupPipeline =
             createPipelineFromLibrary(jsonHashLibrary, @"setup_sieve");
-        _sievePipeline = createPipelineFromLibrary(jsonHashLibrary, @"sieve");
-        _sieveDynamicPipeline =
-            createPipelineFromLibrary(jsonHashLibrary, @"sieve_dynamic");
+        _sievePipeline256 = createSievePipeline(@"sieve", 256);
+        _sieveDynamicPipeline256 = createSievePipeline(@"sieve_dynamic", 256);
+        _sievePipeline512 = createSievePipeline(@"sieve", 512);
+        _sieveDynamicPipeline512 = createSievePipeline(@"sieve_dynamic", 512);
+        if (supportsLSize1024) {
+            _sievePipeline1024 = createSievePipeline(@"sieve", 1024);
+            _sieveDynamicPipeline1024 =
+                createSievePipeline(@"sieve_dynamic", 1024);
+        }
+        if (!SelectSieveLSize(512)) {
+            LOG_F(ERROR, "Failed to select the safe LSIZE=512 sieve pipelines");
+            return false;
+        }
         _sieveSearchPipeline =
             createPipelineFromLibrary(jsonHashLibrary, @"s_sieve");
         _fermatSetupPipeline = createPipeline(@"setup_fermat");
@@ -795,16 +878,6 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         mConfig.STRIPES = gMetalStripes;
         mConfig.WIDTH = 20;     // Matches HIP/CUDA
 
-        if (supportsLSize1024) {
-            // Apple4+ (M1/M2/M3/M4): Use 1024 threads per threadgroup
-            mLSize = 1024;
-            LOG_F(INFO, "GPU Family: Apple4+ - using LSIZE=1024");
-        } else {
-            // Apple2/3 (Legacy): Limited to 512 threads per threadgroup
-            mLSize = 512;
-            LOG_F(INFO, "GPU Family: Apple2/3 - using LSIZE=512");
-        }
-
         // PCOUNT is configurable via --prime-count parameter
         mConfig.PCOUNT = gPrimeCount;
         const NSUInteger requiredThreadgroupMemory =
@@ -817,9 +890,13 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
             return false;
         }
         unsigned checksPerThread = mConfig.PCOUNT / mLSize;
-        LOG_F(INFO,
-              "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, LSIZE=%u, %u prime checks per thread",
-              mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT, mLSize, checksPerThread);
+        if (gDebug) {
+            LOG_F(INFO,
+                  "Initial configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
+                  "LSIZE=%u, %u prime checks per thread",
+                  mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT, mLSize,
+                  checksPerThread);
+        }
 
         mConfig.TARGET = 10;
         mConfig.LIMIT13 = 25;
@@ -1991,12 +2068,19 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
             uint32_t stripes;
             bool dynamicMemory;
         };
-        const SieveScenario scenarios[] = {
+        struct TunedCandidate {
+            SieveScenario scenario;
+            uint32_t lsize;
+            double fastScore;
+        };
+        const SieveScenario allScenarios[] = {
             {2048, 16384, 210, false},
             {4096, 8192, 210, false},
             {4096, 16384, 210, false},
             {4096, 32768, 210, false},
             {4096, 65536, 210, false},
+            {4096, 16384, 420, false},
+            {4096, 32768, 420, false},
             {4096, 16384, 630, false},
             {4096, 32768, 630, false},
             {4096, 65536, 630, false},
@@ -2008,11 +2092,105 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
             {8192, 16384, 316, true},
             {8192, 32768, 316, true},
             {8192, 65536, 316, true},
+            {12288, 32768, 106, true},
+            {12288, 65536, 106, true},
             {12288, 32768, 210, true},
             {12288, 65536, 210, true}
         };
+        std::vector<SieveScenario> scenarios;
+        if (autoTune && gMetalConfigExplicit) {
+            scenarios.push_back({
+                miner->mConfig.SIZE,
+                miner->mConfig.PCOUNT,
+                miner->mConfig.STRIPES,
+                miner->mConfig.SIZE > 4096
+            });
+        } else {
+            scenarios.assign(
+                allScenarios,
+                allScenarios + sizeof(allScenarios) / sizeof(allScenarios[0]));
+        }
+
+        std::vector<uint32_t> lsizeOptions;
+        if (autoTune) {
+            if (miner->_sievePipeline256 && miner->_sieveDynamicPipeline256)
+                lsizeOptions.push_back(256);
+            lsizeOptions.push_back(512);
+            if (miner->_sievePipeline1024 && miner->_sieveDynamicPipeline1024)
+                lsizeOptions.push_back(1024);
+        } else {
+            lsizeOptions.push_back(miner->mLSize);
+        }
         const uint32_t width = 20;
-        const uint32_t lsize = 1024;
+
+        auto isStartupCandidate = [](const SieveScenario& scenario) {
+            return gMetalConfigExplicit ||
+                (scenario.size == 4096 && scenario.stripes == 210 &&
+                 scenario.primeCount == 8192 && !scenario.dynamicMemory) ||
+                (scenario.size == 4096 && scenario.stripes == 210 &&
+                 scenario.primeCount == 16384 && !scenario.dynamicMemory) ||
+                (scenario.size == 4096 && scenario.stripes == 420 &&
+                 scenario.primeCount == 16384 && !scenario.dynamicMemory) ||
+                (scenario.size == 4096 && scenario.stripes == 630 &&
+                 scenario.primeCount == 16384 && !scenario.dynamicMemory) ||
+                (scenario.size == 8192 && scenario.stripes == 106 &&
+                 scenario.primeCount == 16384 && scenario.dynamicMemory) ||
+                (scenario.size == 8192 && scenario.stripes == 210 &&
+                 scenario.primeCount == 16384 && scenario.dynamicMemory) ||
+                (scenario.size == 8192 && scenario.stripes == 316 &&
+                 (scenario.primeCount == 16384 ||
+                  scenario.primeCount == 32768) &&
+                 scenario.dynamicMemory) ||
+                (scenario.size == 12288 && scenario.stripes == 106 &&
+                 scenario.primeCount == 32768 && scenario.dynamicMemory) ||
+                (scenario.size == 12288 && scenario.stripes == 210 &&
+                 (scenario.primeCount == 32768 ||
+                  scenario.primeCount == 65536) &&
+                 scenario.dynamicMemory);
+        };
+
+        size_t autoTuneConfigurationCount = 0;
+        if (autoTune) {
+            for (const uint32_t ignoredLSize : lsizeOptions) {
+                (void)ignoredLSize;
+                for (const SieveScenario& scenario : scenarios) {
+                    if (!isStartupCandidate(scenario))
+                        continue;
+                    if (scenario.dynamicMemory &&
+                        (NSUInteger)metalSieveTileWords(scenario.size) *
+                                sizeof(uint32_t) >
+                            miner->_device.maxThreadgroupMemoryLength) {
+                        continue;
+                    }
+                    ++autoTuneConfigurationCount;
+                }
+            }
+            LOG_F(INFO,
+                  "Starting Metal sieve autotune (%zu configurations); "
+                  "this may take a while...",
+                  autoTuneConfigurationCount);
+        }
+
+        const bool showAutoTuneProgress =
+            autoTune && !gDebug && isatty(fileno(stderr));
+        size_t autoTuneProgress = 0;
+        auto renderAutoTuneProgress = [&](size_t completed) {
+            if (!showAutoTuneProgress)
+                return;
+            constexpr size_t barWidth = 28;
+            const size_t total = std::max<size_t>(autoTuneConfigurationCount, 1);
+            const size_t filled = std::min(barWidth, completed * barWidth / total);
+            const size_t percent = std::min<size_t>(100, completed * 100 / total);
+            fprintf(stderr, "\rMetal sieve autotune [");
+            for (size_t i = 0; i < barWidth; ++i)
+                fputc(i < filled ? '#' : '-', stderr);
+            fprintf(stderr, "] %3zu%% (%zu/%zu)", percent,
+                    std::min(completed, autoTuneConfigurationCount),
+                    autoTuneConfigurationCount);
+            if (completed >= autoTuneConfigurationCount)
+                fputc('\n', stderr);
+            fflush(stderr);
+        };
 
         auto digestWords = [](const uint32_t* words, size_t count) {
             uint64_t digest = 1469598103934665603ull;
@@ -2029,34 +2207,37 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
         bool foundUsableScenario = false;
         double bestScore = 0.0;
         SieveScenario bestScenario = {4096, 16384, 210, false};
-        for (const SieveScenario& scenario : scenarios) {
-            if (autoTune) {
-                const bool startupCandidate =
-                    (scenario.size == 4096 && scenario.stripes == 210 &&
-                     scenario.primeCount == 16384 && !scenario.dynamicMemory) ||
-                    (scenario.size == 4096 && scenario.stripes == 630 &&
-                     scenario.primeCount == 16384 && !scenario.dynamicMemory) ||
-                    (scenario.size == 8192 && scenario.stripes == 106 &&
-                     scenario.primeCount == 16384 && scenario.dynamicMemory) ||
-                    (scenario.size == 8192 && scenario.stripes == 316 &&
-                     (scenario.primeCount == 16384 || scenario.primeCount == 32768) &&
-                     scenario.dynamicMemory) ||
-                    (scenario.size == 12288 && scenario.stripes == 210 &&
-                     (scenario.primeCount == 32768 || scenario.primeCount == 65536) &&
-                     scenario.dynamicMemory);
-                if (!startupCandidate)
-                    continue;
-            }
-            if (scenario.dynamicMemory &&
-                (NSUInteger)metalSieveTileWords(scenario.size) * sizeof(uint32_t) >
-                    miner->_device.maxThreadgroupMemoryLength) {
-                LOG_F(WARNING,
-                      "Sieve autotune: skipping SIZE=%u; requires %u bytes threadgroup memory",
-                      scenario.size,
-                      metalSieveTileWords(scenario.size) * (uint32_t)sizeof(uint32_t));
+        uint32_t bestLSize = miner->mLSize;
+        std::vector<TunedCandidate> rankedCandidates;
+        for (const uint32_t lsize : lsizeOptions) {
+            id<MTLComputePipelineState> staticSievePipeline =
+                lsize == 256 ? miner->_sievePipeline256 :
+                (lsize == 512 ? miner->_sievePipeline512 :
+                                miner->_sievePipeline1024);
+            id<MTLComputePipelineState> dynamicSievePipeline =
+                lsize == 256 ? miner->_sieveDynamicPipeline256 :
+                (lsize == 512 ? miner->_sieveDynamicPipeline512 :
+                                miner->_sieveDynamicPipeline1024);
+            if (!staticSievePipeline || !dynamicSievePipeline)
                 continue;
-            }
-            @autoreleasepool {
+
+            for (const SieveScenario& scenario : scenarios) {
+                if (autoTune && !isStartupCandidate(scenario))
+                    continue;
+                if (scenario.dynamicMemory &&
+                    (NSUInteger)metalSieveTileWords(scenario.size) * sizeof(uint32_t) >
+                        miner->_device.maxThreadgroupMemoryLength) {
+                    LOG_F(WARNING,
+                          "Sieve autotune: skipping SIZE=%u; requires %u bytes threadgroup memory",
+                          scenario.size,
+                          metalSieveTileWords(scenario.size) * (uint32_t)sizeof(uint32_t));
+                    continue;
+                }
+                if (autoTune) {
+                    renderAutoTuneProgress(autoTuneProgress);
+                    ++autoTuneProgress;
+                }
+                @autoreleasepool {
                 const uint32_t stripes = scenario.stripes;
                 const uint32_t groups = (stripes / 2) * width;
                 const uint32_t tileCount = metalSieveTileCount(scenario.size);
@@ -2131,7 +2312,7 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
                     id<MTLCommandBuffer> command = [miner->_commandQueue commandBuffer];
                     id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
                     id<MTLComputePipelineState> sievePipeline = scenario.dynamicMemory ?
-                        miner->_sieveDynamicPipeline : miner->_sievePipeline;
+                        dynamicSievePipeline : staticSievePipeline;
                     [encoder setComputePipelineState:sievePipeline];
                     if (scenario.dynamicMemory) {
                         [encoder setThreadgroupMemoryLength:(NSUInteger)tileWords * sizeof(uint32_t)
@@ -2263,46 +2444,157 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
                 double primeGroups = (double)scenario.primeCount * groups;
                 double millionPrimeGroupsPerSecond = primeGroups / (medianMs * 1000.0);
                 double rangeMillions = (double)scenario.size * 32.0 * stripes / 1000000.0;
-                LOG_F(INFO, "Sieve[%s] SIZE=%u STRIPES=%u PCOUNT=%u range=%.1fM: PASS, %.3f ms, %.1f Mprime-groups/s, candidates=%u+%u, digest=%016llx",
-                      scenario.dynamicMemory ? "dynamic" : "static",
-                      scenario.size, stripes, scenario.primeCount, rangeMillions,
-                      medianMs, millionPrimeGroupsPerSecond,
-                      firstCount320, firstCount352,
-                      (unsigned long long)firstDigest);
+                if (!autoTune || gDebug) {
+                    LOG_F(INFO, "Sieve[%s] LSIZE=%u SIZE=%u STRIPES=%u PCOUNT=%u range=%.1fM: PASS, %.3f ms, %.1f Mprime-groups/s, candidates=%u+%u, digest=%016llx",
+                          scenario.dynamicMemory ? "dynamic" : "static",
+                          lsize, scenario.size, stripes, scenario.primeCount, rangeMillions,
+                          medianMs, millionPrimeGroupsPerSecond,
+                          firstCount320, firstCount352,
+                          (unsigned long long)firstDigest);
+                }
 
                 if (autoTune) {
-                    // Account for downstream Fermat work instead of selecting on
-                    // sieve time alone. 4 Mtests/s is a conservative Apple-Silicon
-                    // baseline; candidate density dominates only close decisions.
+                    // Estimate completed search range through both the sieve
+                    // and its downstream Fermat load. Survivor count is a cost,
+                    // not the objective: rewarding candidates directly makes a
+                    // loose low-PCOUNT sieve look artificially attractive.
+                    // 4 Mtests/s is a conservative Apple-Silicon baseline.
                     const uint64_t candidates =
                         std::min<uint64_t>(firstCount320, maxCandidates) +
                         std::min<uint64_t>(firstCount352, maxCandidates);
                     const double estimatedFermatMs = (double)candidates / 4000.0;
-                    const double score = rangeMillions / (medianMs + estimatedFermatMs);
-                    LOG_F(INFO,
-                          "Sieve autotune candidate: SIZE=%u STRIPES=%u PCOUNT=%u score=%.3f",
-                          scenario.size, stripes, scenario.primeCount, score);
+                    const double score =
+                        rangeMillions / (medianMs + estimatedFermatMs);
+                    rankedCandidates.push_back({scenario, lsize, score});
+                    if (gDebug) {
+                        LOG_F(INFO,
+                              "Sieve autotune candidate: LSIZE=%u SIZE=%u STRIPES=%u PCOUNT=%u score=%.3f estimated G/s",
+                              lsize, scenario.size, stripes,
+                              scenario.primeCount, score);
+                    }
                     if (!foundUsableScenario || score > bestScore) {
                         foundUsableScenario = true;
                         bestScore = score;
                         bestScenario = scenario;
+                        bestLSize = lsize;
                     }
                 }
             }
         }
+        }
+
+        if (autoTune)
+            renderAutoTuneProgress(autoTuneConfigurationCount);
 
         if (autoTune) {
             if (!foundUsableScenario) {
                 LOG_F(WARNING, "Sieve autotune found no usable scenario; keeping safe defaults");
                 return false;
             }
+
+            std::sort(rankedCandidates.begin(), rankedCandidates.end(),
+                      [](const TunedCandidate& lhs,
+                         const TunedCandidate& rhs) {
+                          return lhs.fastScore > rhs.fastScore;
+                      });
+
+            bool selectedByMiningBenchmark = false;
+            double bestMiningScore = 0.0;
+            if (gMetalMiningAutoTune && !rankedCandidates.empty()) {
+                const size_t finalistCount =
+                    std::min<size_t>(3, rankedCandidates.size());
+                LOG_F(INFO,
+                      "Starting end-to-end Metal mining autotune for %zu "
+                      "finalists (~%zu seconds)...",
+                      finalistCount, finalistCount);
+
+                const bool showMiningProgress =
+                    !gDebug && isatty(fileno(stderr));
+                auto renderMiningProgress = [&](size_t completed) {
+                    if (!showMiningProgress)
+                        return;
+                    constexpr size_t barWidth = 28;
+                    const size_t filled =
+                        completed * barWidth / finalistCount;
+                    const size_t percent = completed * 100 / finalistCount;
+                    fprintf(stderr, "\rMetal mining autotune [");
+                    for (size_t i = 0; i < barWidth; ++i)
+                        fputc(i < filled ? '#' : '-', stderr);
+                    fprintf(stderr, "] %3zu%% (%zu/%zu)", percent,
+                            completed, finalistCount);
+                    if (completed == finalistCount)
+                        fputc('\n', stderr);
+                    fflush(stderr);
+                };
+
+                renderMiningProgress(0);
+                for (size_t i = 0; i < finalistCount; ++i) {
+                    const TunedCandidate& candidate = rankedCandidates[i];
+                    miner->mConfig.SIZE = candidate.scenario.size;
+                    miner->mConfig.STRIPES = candidate.scenario.stripes;
+                    miner->mConfig.PCOUNT = candidate.scenario.primeCount;
+                    if (!miner->SelectSieveLSize(candidate.lsize))
+                        continue;
+
+                    if (gDebug) {
+                        LOG_F(INFO,
+                              "Mining autotune finalist %zu/%zu: LSIZE=%u "
+                              "SIZE=%u STRIPES=%u PCOUNT=%u",
+                              i + 1, finalistCount, candidate.lsize,
+                              candidate.scenario.size,
+                              candidate.scenario.stripes,
+                              candidate.scenario.primeCount);
+                    }
+
+                    miner->MakeExit = false;
+                    MiningBenchmarkResult result =
+                        miner->BenchmarkMining(1, false);
+                    if (result.completed &&
+                        (!selectedByMiningBenchmark ||
+                         result.effectiveScanGps > bestMiningScore)) {
+                        selectedByMiningBenchmark = true;
+                        bestMiningScore = result.effectiveScanGps;
+                        bestScenario = candidate.scenario;
+                        bestLSize = candidate.lsize;
+                    }
+                    if (gDebug) {
+                        LOG_F(INFO,
+                              "Mining autotune finalist %zu: %.3f G/s, "
+                              "%.1f sieve candidates/s, %.1f final candidates/s",
+                              i + 1, result.effectiveScanGps,
+                              result.sieveCandidatesPerSecond,
+                              result.finalCandidatesPerSecond);
+                    }
+                    renderMiningProgress(i + 1);
+                }
+
+                if (!selectedByMiningBenchmark) {
+                    LOG_F(WARNING,
+                          "End-to-end mining autotune produced no complete "
+                          "result; using the fast sieve selection");
+                }
+            }
+
             miner->mConfig.SIZE = bestScenario.size;
             miner->mConfig.STRIPES = bestScenario.stripes;
             miner->mConfig.PCOUNT = bestScenario.primeCount;
-            LOG_F(INFO,
-                  "Sieve autotune selected SIZE=%u STRIPES=%u PCOUNT=%u (score %.3f)",
-                  bestScenario.size, bestScenario.stripes,
-                  bestScenario.primeCount, bestScore);
+            if (!miner->SelectSieveLSize(bestLSize)) {
+                LOG_F(ERROR, "Sieve autotune selected an unavailable LSIZE=%u",
+                      bestLSize);
+                return false;
+            }
+            if (selectedByMiningBenchmark) {
+                LOG_F(INFO,
+                      "Mining autotune selected LSIZE=%u SIZE=%u STRIPES=%u "
+                      "PCOUNT=%u (end-to-end %.3f G/s)",
+                      bestLSize, bestScenario.size, bestScenario.stripes,
+                      bestScenario.primeCount, bestMiningScore);
+            } else {
+                LOG_F(INFO,
+                      "Sieve autotune selected LSIZE=%u SIZE=%u STRIPES=%u PCOUNT=%u (score %.3f estimated G/s)",
+                      bestLSize, bestScenario.size, bestScenario.stripes,
+                      bestScenario.primeCount, bestScore);
+            }
         }
         return true;
     }
@@ -2382,19 +2674,28 @@ void runMetalBenchmarks(id<MTLDevice> device, PrimeMiner* miner) {
 }
 
 void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
-    MiningLoop(nullptr, gbp, submit, 0);
+    (void)MiningLoop(nullptr, gbp, submit, 0);
 }
 
 void PrimeMiner::MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds) {
-    MiningLoop(ctx, nullptr, nullptr, benchmarkSeconds);
+    (void)MiningLoop(ctx, nullptr, nullptr, benchmarkSeconds);
 }
 
-void PrimeMiner::MiningLoop(GetWorkContext* ctx,
-                            GetBlockTemplateContext* gbp,
-                            SubmitContext* submit,
-                            unsigned benchmarkSeconds) {
+MiningBenchmarkResult PrimeMiner::BenchmarkMining(unsigned benchmarkSeconds,
+                                                  bool reportResults) {
+    return MiningLoop(nullptr, nullptr, nullptr, benchmarkSeconds,
+                      reportResults);
+}
+
+MiningBenchmarkResult PrimeMiner::MiningLoop(GetWorkContext* ctx,
+                                             GetBlockTemplateContext* gbp,
+                                             SubmitContext* submit,
+                                             unsigned benchmarkSeconds,
+                                             bool reportBenchmarkResults) {
+    MiningBenchmarkResult benchmarkResult;
     @autoreleasepool {
         const bool benchmarkMode = benchmarkSeconds > 0;
+        const bool quietBenchmark = benchmarkMode && !reportBenchmarkResults;
         const bool blockTemplateMode = gbp != nullptr;
         JsonWork currentWork;
         bool hasChanged = false;
@@ -2407,7 +2708,8 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
         mineCtx.threadIdx = mID;
 
         // Initialize buffers
-        LOG_F(INFO, "GPU %d: Initializing buffers", mID);
+        if (!quietBenchmark)
+            LOG_F(INFO, "GPU %d: Initializing buffers", mID);
 
         mJsonMidstateBuf.init(_device, 8);
         mJsonRemainingPrefixBuf.init(_device, 128);
@@ -2433,7 +2735,7 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
             if (!mSieveBuf[k].init(_device, sieveWords) ||
                 !mSieveOff[k].init(_device, offsetWords)) {
                 LOG_F(ERROR, "GPU %d: Failed to allocate sieve buffers", mID);
-                return;
+                return benchmarkResult;
             }
         }
 
@@ -2516,12 +2818,16 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
             unsigned primorialbits = mpz_sizeinbase(primorial[0].get_mpz_t(), 2);
             mpz_class sievesize = mConfig.SIZE * 32 * mConfig.STRIPES;
             unsigned sievebits = mpz_sizeinbase(sievesize.get_mpz_t(), 2);
-            LOG_F(INFO, "GPU %d: primorial = %s (%d bits)", mID, primorial[0].get_str(10).c_str(), primorialbits);
-            LOG_F(INFO, "GPU %d: sieve size = %s (%d bits)", mID, sievesize.get_str(10).c_str(), sievebits);
+            if (!quietBenchmark) {
+                LOG_F(INFO, "GPU %d: primorial = %s (%d bits)", mID, primorial[0].get_str(10).c_str(), primorialbits);
+                LOG_F(INFO, "GPU %d: sieve size = %s (%d bits)", mID, sievesize.get_str(10).c_str(), sievebits);
+            }
         }
 
-        LOG_F(INFO, "GPU %d: Starting %s mining loop", mID,
-              blockTemplateMode ? "getblocktemplate" : "JSON getwork");
+        if (!quietBenchmark) {
+            LOG_F(INFO, "GPU %d: Starting %s mining loop", mID,
+                  blockTemplateMode ? "getblocktemplate" : "JSON getwork");
+        }
 
         // Initialize ALL candidate count buffers to 0 (both ridx and widx)
         // This matches HIP behavior at src/Hip/xpmclient_hip.cpp lines 631-635
@@ -2534,7 +2840,8 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
                 mCandidatesCountBuffers[sieveIdx][instIdx].copyToDevice();
             }
         }
-        LOG_F(INFO, "GPU %d: Initialized all candidate count buffers to 0", mID);
+        if (!quietBenchmark)
+            LOG_F(INFO, "GPU %d: Initialized all candidate count buffers to 0", mID);
 
         // End-to-end benchmark uses deterministic work but otherwise executes the
         // same hash -> validation -> sieve -> Fermat -> CPU chain-check loop.
@@ -2552,10 +2859,12 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
             iteration = 0;
             mHasLastSubmitted = false;
 
-            LOG_F(INFO,
-                  "GPU %d: Starting %u-second end-to-end getwork benchmark "
-                  "(deterministic work, network and submission excluded)",
-                  mID, benchmarkSeconds);
+            if (!quietBenchmark) {
+                LOG_F(INFO,
+                      "GPU %d: Starting %u-second end-to-end getwork benchmark "
+                      "(deterministic work, network and submission excluded)",
+                      mID, benchmarkSeconds);
+            }
 
             prepareJsonMidstate(currentWork, &midstateData);
 
@@ -2810,7 +3119,7 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
 
             if (result != 0) {
                 LOG_F(ERROR, "GPU %d: Kernel timeout after 5 seconds! GPU may be hung.", mID);
-                return;
+                return benchmarkResult;
             }
 
             if (gDebug) {
@@ -2985,8 +3294,12 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
                         benchmarkHashStarvations++;
                     if (!reset) {  // Don't increase the batch on new work.
                         numHashCoeff = std::min(numHashCoeff + 32768, maxNumHashCoeff);
-                        LOG_F(WARNING, "GPU %d: Ran out of hashes, increasing sha256 work size coefficient to %u",
-                              mID, numHashCoeff);
+                        if (!quietBenchmark || gDebug) {
+                            LOG_F(WARNING,
+                                  "GPU %d: Ran out of hashes, increasing sha256 "
+                                  "work size coefficient to %u",
+                                  mID, numHashCoeff);
+                        }
                     }
                     break;
                 }
@@ -3014,7 +3327,9 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
 
                 // Create command buffer for sieve operations
                 id<MTLCommandBuffer> sieveCommandBuffer = [_commandQueue commandBuffer];
+                sieveCommandBuffer.label = @"Sieve Pipeline";
                 id<MTLComputeCommandEncoder> encoder = [sieveCommandBuffer computeCommandEncoder];
+                encoder.label = @"Sieve Setup Encoder";
 
                 // 1. Setup sieve kernel
                 @try {
@@ -3034,20 +3349,29 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
                     MTLSize setupThreadgroup = MTLSizeMake(mLSize, 1, 1);
                     [encoder dispatchThreadgroups:setupGrid threadsPerThreadgroup:setupThreadgroup];
 
-                // CRITICAL: Force setup_sieve completion before sieve kernels
-                // Without this, setup_sieve may not finish before sieve reads the offset buffers
-                // This is the root cause of all-zero offsets!
-                [encoder endEncoding];
-                [sieveCommandBuffer commit];
-                [sieveCommandBuffer waitUntilCompleted];
-
-                if (gDebug && i == 0 && hid == 0) {
-                    LOG_F(INFO, "DEBUG: setup_sieve completed, status: %ld", (long)sieveCommandBuffer.status);
-                }
-
-                // Recreate command buffer and encoder for remaining kernels
-                sieveCommandBuffer = [_commandQueue commandBuffer];
-                encoder = [sieveCommandBuffer computeCommandEncoder];
+                    // End the setup pass to establish a resource dependency before
+                    // the sieve reads its offset buffers. In normal mining both
+                    // encoders stay in one command buffer, avoiding an unnecessary
+                    // CPU/GPU commit-and-wait round trip. Debug mode keeps the
+                    // intermediate wait because it inspects setup output on the CPU.
+                    [encoder endEncoding];
+                    if (gDebug) {
+                        [sieveCommandBuffer commit];
+                        [sieveCommandBuffer waitUntilCompleted];
+                        if (sieveCommandBuffer.status == MTLCommandBufferStatusError) {
+                            LOG_F(ERROR, "GPU %d: Sieve setup command failed: %s", mID,
+                                  [[sieveCommandBuffer.error localizedDescription] UTF8String]);
+                            MakeExit = true;
+                            return benchmarkResult;
+                        }
+                        if (gDebug && i == 0 && hid == 0) {
+                            LOG_F(INFO, "DEBUG: setup_sieve completed, status: %ld", (long)sieveCommandBuffer.status);
+                        }
+                        sieveCommandBuffer = [_commandQueue commandBuffer];
+                        sieveCommandBuffer.label = @"Sieve and Search";
+                    }
+                    encoder = [sieveCommandBuffer computeCommandEncoder];
+                    encoder.label = @"Sieve and Search Encoder";
 
                 // Calculate SIEVERANGE constants
                 // These determine different processing strategies for primes of different sizes
@@ -3191,7 +3515,7 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
                         LOG_F(ERROR, "GPU %d: Sieve command failed: %s", mID,
                               [[sieveCommandBuffer.error localizedDescription] UTF8String]);
                         MakeExit = true;
-                        return;
+                        return benchmarkResult;
                     }
 
                     // Debug: Check sieve output for first hash
@@ -3342,6 +3666,19 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
                           testCount, fermatCount, _fermatKernel320Pipeline, mSievePerRound);
             FermatDispatch(mFermat352, mSieveBuffers, mCandidatesCountBuffers, 1, ridx, widx,
                           testCount, fermatCount, _fermatKernel352Pipeline, mSievePerRound);
+
+            // A new work response can arrive while the GPU is completing the
+            // previous sieve/Fermat batch. Discard that batch once here instead
+            // of CPU-validating and logging every old candidate individually.
+            if (!benchmarkMode && !blockTemplateMode &&
+                ctx->getWorkId() != roundWorkId) {
+                if (gDebug) {
+                    LOG_F(INFO,
+                          "GPU %d: Discarding completed candidate batch for stale work",
+                          mID);
+                }
+                continue;
+            }
 
             // CPU chain validation and submission
             CPrimalityTestParamsCuda testParams;
@@ -3655,49 +3992,58 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
                     const double retainedPercent = benchmarkGpuMatches == 0 ? 100.0 :
                         100.0 * (double)benchmarkMatchesRetained /
                             (double)benchmarkGpuMatches;
-                    LOG_F(INFO, "");
-                    LOG_F(INFO, "=== End-to-end blocktree.get_work benchmark (Metal) ===");
-                    LOG_F(INFO,
-                          "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
-                          "LSIZE=%u, sieves/round=%u, Fermat batch=%u, "
-                          "hash coefficient=%u",
-                          mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT,
-                          mLSize, mSievePerRound, mBlockSize, numHashCoeff);
-                    LOG_F(INFO,
-                          "Wall time: %.3f s, loop iterations: %u, sieve jobs: %llu",
-                          elapsed, iteration,
-                          (unsigned long long)benchmarkSieveJobs);
-                    LOG_F(INFO,
-                          "JSON hashes dispatched: %.3f M/s (%llu total)",
-                          benchmarkHashesDispatched / elapsed / 1000000.0,
-                          (unsigned long long)benchmarkHashesDispatched);
-                    LOG_F(INFO,
-                          "GPU hash matches: %.1f/s; retained for CPU: %.1f/s "
-                          "(%.4f%% retained)",
-                          benchmarkGpuMatches / elapsed,
-                          benchmarkMatchesRetained / elapsed,
-                          retainedPercent);
-                    LOG_F(INFO,
-                          "CPU-validated hashes feeding sieve: %.1f/s",
-                          benchmarkValidHashes / elapsed);
-                    LOG_F(INFO,
-                          "Effective end-to-end sieve scan: %.3f G/s",
-                          sieveRange * benchmarkSieveJobs / elapsed / 1000000000.0);
-                    LOG_F(INFO,
-                          "Sieve candidates feeding Fermat: %.1f/s (%llu total)",
-                          testCount / elapsed,
-                          (unsigned long long)testCount);
-                    LOG_F(INFO,
-                          "Final GPU candidates: %.1f/s; CPU chain checks: %.1f/s; "
-                          "shares meeting target: %llu",
-                          benchmarkFinalCandidates / elapsed,
-                          benchmarkCpuCandidates / elapsed,
-                          (unsigned long long)benchmarkShares);
-                    LOG_F(INFO,
-                          "Hash-starved loop iterations: %llu; GPU-prefix mismatches: %llu",
-                          (unsigned long long)benchmarkHashStarvations,
-                          (unsigned long long)gpuPrefixMismatchCount);
-                    LOG_F(INFO, "================================================");
+                    benchmarkResult.completed = true;
+                    benchmarkResult.elapsedSeconds = elapsed;
+                    benchmarkResult.effectiveScanGps =
+                        sieveRange * benchmarkSieveJobs / elapsed / 1000000000.0;
+                    benchmarkResult.sieveCandidatesPerSecond = testCount / elapsed;
+                    benchmarkResult.finalCandidatesPerSecond =
+                        benchmarkFinalCandidates / elapsed;
+                    if (reportBenchmarkResults) {
+                        LOG_F(INFO, "");
+                        LOG_F(INFO, "=== End-to-end blocktree.get_work benchmark (Metal) ===");
+                        LOG_F(INFO,
+                              "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
+                              "LSIZE=%u, sieves/round=%u, Fermat batch=%u, "
+                              "hash coefficient=%u",
+                              mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT,
+                              mLSize, mSievePerRound, mBlockSize, numHashCoeff);
+                        LOG_F(INFO,
+                              "Wall time: %.3f s, loop iterations: %u, sieve jobs: %llu",
+                              elapsed, iteration,
+                              (unsigned long long)benchmarkSieveJobs);
+                        LOG_F(INFO,
+                              "JSON hashes dispatched: %.3f M/s (%llu total)",
+                              benchmarkHashesDispatched / elapsed / 1000000.0,
+                              (unsigned long long)benchmarkHashesDispatched);
+                        LOG_F(INFO,
+                              "GPU hash matches: %.1f/s; retained for CPU: %.1f/s "
+                              "(%.4f%% retained)",
+                              benchmarkGpuMatches / elapsed,
+                              benchmarkMatchesRetained / elapsed,
+                              retainedPercent);
+                        LOG_F(INFO,
+                              "CPU-validated hashes feeding sieve: %.1f/s",
+                              benchmarkValidHashes / elapsed);
+                        LOG_F(INFO,
+                              "Effective end-to-end sieve scan: %.3f G/s",
+                              benchmarkResult.effectiveScanGps);
+                        LOG_F(INFO,
+                              "Sieve candidates feeding Fermat: %.1f/s (%llu total)",
+                              benchmarkResult.sieveCandidatesPerSecond,
+                              (unsigned long long)testCount);
+                        LOG_F(INFO,
+                              "Final GPU candidates: %.1f/s; CPU chain checks: %.1f/s; "
+                              "shares meeting target: %llu",
+                              benchmarkResult.finalCandidatesPerSecond,
+                              benchmarkCpuCandidates / elapsed,
+                              (unsigned long long)benchmarkShares);
+                        LOG_F(INFO,
+                              "Hash-starved loop iterations: %llu; GPU-prefix mismatches: %llu",
+                              (unsigned long long)benchmarkHashStarvations,
+                              (unsigned long long)gpuPrefixMismatchCount);
+                        LOG_F(INFO, "================================================");
+                    }
                     break;
                 }
             }
@@ -3706,8 +4052,10 @@ void PrimeMiner::MiningLoop(GetWorkContext* ctx,
         if (workTemplate) {
             blktmpl_free(workTemplate);
         }
-        LOG_F(INFO, "GPU %d: Mining loop exited", mID);
+        if (!quietBenchmark)
+            LOG_F(INFO, "GPU %d: Mining loop exited", mID);
     }
+    return benchmarkResult;
 }
 
 //=============================================================================
@@ -3722,6 +4070,7 @@ int main(int argc, char** argv) {
         OPT_METAL_SIEVE_WORDS = 1000,
         OPT_METAL_STRIPES,
         OPT_NO_METAL_AUTOTUNE,
+        OPT_METAL_AUTOTUNE_MINING,
         OPT_MINING_BENCHMARK,
         OPT_PROTOCOL,
         OPT_RPC_USER,
@@ -3740,6 +4089,8 @@ int main(int argc, char** argv) {
         {"metal-sieve-words", required_argument, 0, OPT_METAL_SIEVE_WORDS},
         {"metal-stripes", required_argument, 0, OPT_METAL_STRIPES},
         {"no-metal-autotune", no_argument, 0, OPT_NO_METAL_AUTOTUNE},
+        {"metal-autotune-mining", no_argument, 0,
+         OPT_METAL_AUTOTUNE_MINING},
         {"benchmark", no_argument, 0, 'b'},
         {"mining-benchmark", required_argument, 0, OPT_MINING_BENCHMARK},
         {"protocol", required_argument, 0, OPT_PROTOCOL},
@@ -3776,6 +4127,9 @@ int main(int argc, char** argv) {
                 gMetalConfigExplicit = true;
                 break;
             case OPT_NO_METAL_AUTOTUNE: gMetalAutoTune = false; break;
+            case OPT_METAL_AUTOTUNE_MINING:
+                gMetalMiningAutoTune = true;
+                break;
             case OPT_MINING_BENCHMARK:
                 miningBenchmarkSeconds = (unsigned)strtoul(optarg, nullptr, 10);
                 break;
@@ -3792,7 +4146,7 @@ int main(int argc, char** argv) {
                 printf("XPMiner Metal - Primecoin miner for Apple Silicon\n\n");
                 printf("Usage: xpmmetal [options]\n");
                 printf("  -u, --url <url>             WebSocket URL for getwork, or node RPC URL\n");
-                printf("      --protocol <name>       getwork (default) or getblocktemplate\n");
+                printf("      --protocol <name>       getblocktemplate (default) or getwork\n");
                 printf("      --wallet <address>      Payout address required by getblocktemplate\n");
                 printf("      --rpc-user <name>       Node RPC user\n");
                 printf("      --rpc-password <pass>   Node RPC password\n");
@@ -3802,11 +4156,13 @@ int main(int argc, char** argv) {
                 printf("  -s, --sieve-size <n>        Sieve size (default: 10)\n");
                 printf("  -w, --weave-depth <n>       Weave depth (default: 8192)\n");
                 printf("  -e, --extensions-num <n>    Extensions number (default: 9)\n");
-                printf("  -P, --prime-count <n>       Prime count; disables startup autotuning\n");
+                printf("  -P, --prime-count <n>       Prime count; restricts autotuning to this geometry\n");
                 printf("                              Try: 8192, 16384, 32768, or 65536\n");
-                printf("      --metal-sieve-words <n> Metal sieve words: 4096, 8192, or tiled 12288; disables autotuning\n");
-                printf("      --metal-stripes <n>     Even stripe count; disables autotuning\n");
+                printf("      --metal-sieve-words <n> Metal sieve words: 4096, 8192, or tiled 12288\n");
+                printf("      --metal-stripes <n>     Even stripe count; restricts autotuning to this geometry\n");
                 printf("      --no-metal-autotune     Use safe defaults: 4096/210/16384\n");
+                printf("      --metal-autotune-mining Validate three fast-tune finalists through the real\n");
+                printf("                              mining pipeline (~3 seconds, opt-in)\n");
                 printf("  -b, --benchmark             Run isolated kernel diagnostics\n");
                 printf("      --mining-benchmark <s>  Run the real getwork mining pipeline for <s> seconds\n");
                 printf("  -A, --submit-all-chains     [EXPERIMENTAL] Submit all chain types (Cunningham1,\n");
@@ -3836,6 +4192,18 @@ int main(int argc, char** argv) {
 
     if (runBenchmark && miningBenchmarkSeconds > 0) {
         fprintf(stderr, "Error: choose either --benchmark or --mining-benchmark\n");
+        return 1;
+    }
+    if (gMetalMiningAutoTune && !gMetalAutoTune) {
+        fprintf(stderr,
+                "Error: --metal-autotune-mining cannot be combined with "
+                "--no-metal-autotune\n");
+        return 1;
+    }
+    if (runBenchmark && gMetalMiningAutoTune) {
+        fprintf(stderr,
+                "Error: --metal-autotune-mining is a startup mode, not an "
+                "isolated --benchmark option\n");
         return 1;
     }
     const bool useGetBlockTemplate =
@@ -3955,24 +4323,22 @@ int main(int argc, char** argv) {
 
         // Create miner
         // depth=4 matches HIP miner (candidates that reach this depth go to CPU validation)
-        // LSize will be auto-detected based on GPU family (1024 for Apple4+, 512 for Apple2/3)
+        // The initializer builds the supported sieve threadgroup variants;
+        // startup autotuning selects the best one for this GPU.
         PrimeMiner miner(0, 1, 4, 4, 1024);
         if (!miner.Initialize(device)) {
             LOG_F(ERROR, "Failed to initialize miner");
             return 1;
         }
 
-        const bool shouldAutoTune = gMetalAutoTune && !gMetalConfigExplicit;
+        const bool shouldAutoTune = gMetalAutoTune;
         if (shouldAutoTune) {
-            LOG_F(INFO, "Running safe Metal sieve startup autotune...");
             if (!metalSieveEvaluate(&miner, true)) {
                 LOG_F(ERROR,
                       "Metal sieve autotune could not run the safe baseline; refusing to start mining");
                 return 1;
             }
-        } else if (gMetalConfigExplicit) {
-            LOG_F(INFO, "Metal sieve autotune disabled by explicit configuration");
-        } else if (!gMetalAutoTune) {
+        } else {
             LOG_F(INFO, "Metal sieve autotune disabled; using safe defaults");
         }
 

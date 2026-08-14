@@ -157,9 +157,12 @@ the full logical window. Host dispatch count and shader tile decoding must be
 changed together if more sizes are added.
 
 Metal uses `threadgroup` memory and `threadgroup_barrier` where CUDA uses
-`__shared__` memory and `__syncthreads`. The default modern Apple path uses 1024
-threads per threadgroup; capability checks select a smaller value for legacy
-families. Never assume CUDA warp size when using Metal SIMD-group operations.
+`__shared__` memory and `__syncthreads`. The host builds 256- and 512-thread
+sieve variants, plus a 1024-thread variant on supported devices. Each pipeline
+uses a matching `maxTotalThreadsPerThreadgroup` compiler occupancy hint, and
+startup tuning measures the supported variants instead of treating the device
+family maximum as the optimum. Never assume CUDA warp size when using Metal
+SIMD-group operations.
 
 ## Metal-specific code paths
 
@@ -209,17 +212,22 @@ geometries, and exact CPU/GPU block-header hashes across 4096 nonces.
 network or submission and reports hashes, effective sieve scan, candidates
 entering Fermat, final candidates, and CPU validation mismatches.
 
-Traditional node mining is selected explicitly so existing Metal getwork
-commands remain compatible:
+The normal startup tuner uses a short isolated sieve search. The opt-in
+`--metal-autotune-mining` mode sends its three highest-ranked configurations
+through that deterministic mining pipeline for about one second each. It adds
+roughly three seconds and remains disabled by default.
+
+Like the HIP and CUDA frontends, Metal defaults to traditional
+`getblocktemplate` node mining:
 
 ```sh
-./xpmmetal --protocol getblocktemplate \
-  --url 127.0.0.1:9912 --rpc-user USER --rpc-password PASS \
+./xpmmetal --url 127.0.0.1:9912 --rpc-user USER --rpc-password PASS \
   --wallet PRIMECOIN_ADDRESS [--worker-id 0]
 ```
 
 The RPC URL defaults to `127.0.0.1:9912` when `--url` is omitted. The wallet is
-required; RPC credentials depend on the node configuration.
+required; RPC credentials depend on the node configuration. WebSocket pool
+mining remains available explicitly with `--protocol getwork --url ws://...`.
 
 An isolated kernel throughput number is not a miner-performance result. Compare
 backends using the end-to-end benchmark with the same deterministic work, while

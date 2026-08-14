@@ -4,8 +4,8 @@
  * Sieve of Eratosthenes kernels for Metal
  * Ported from sieve_hip.cpp
  *
- * NOTE: This is a simplified version. Full implementation requires
- * additional complexity for optimal performance.
+ * The CUDA/HIP algorithm is retained, with Metal-specific tiling and
+ * per-device threadgroup specialization for Apple GPU limits.
  */
 
 #include <metal_stdlib>
@@ -86,6 +86,9 @@ inline void sieve_impl(
     uint tid,
     uint gid)
 {
+    const uint lsizeLog2 = SIEVE_LSIZE_LOG2;
+    const uint lsize = 1u << lsizeLog2;
+
     // Apple GPUs expose at most 32 KiB of threadgroup memory. A logical HIP
     // SIZE=12288 stripe therefore runs as two 6144-word local-memory tiles.
     // The output remains one contiguous logical stripe for s_sieve.
@@ -105,7 +108,7 @@ inline void sieve_impl(
     device uint* offset = &offset_all[PCOUNT * line];
 
     // Initialize threadgroup sieve to zeros
-    for (uint i = id; i < tileSize; i += LSIZE) {
+    for (uint i = id; i < tileSize; i += lsize) {
         sieve_local[i] = 0;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -113,11 +116,14 @@ inline void sieve_impl(
     // Phase 1: Batch processing with nps_all[]
     uint poff = 0;
 
-    for (uint b = 0; b < S1RUNS; b++) {
-        uint nps = nps_all[b];
-        const uint var = LSIZE >> nps;
+    const uint s1Runs = lsizeLog2 == 10 ? 8 : 9;
+    for (uint b = 0; b < s1Runs; b++) {
+        const uint nps = lsizeLog2 == 10 ?
+            SIEVE_NPS_1024[b] :
+            (lsizeLog2 == 9 ? SIEVE_NPS_512[b] : SIEVE_NPS_256[b]);
+        const uint var = lsize >> nps;
         const uint lpoff = id & (var - 1);
-        uint ip = id >> (LSIZELOG2 - nps);
+        uint ip = id >> (lsizeLog2 - nps);
 
         const uint2 tmp1 = primes[poff + ip];
         const uint prime = tmp1.x;
@@ -194,13 +200,15 @@ inline void sieve_impl(
     constant uint2* pprimes = &primes[id];
     device uint* poffset = &offset[id];
 
-    uint plifo[NLIFO];
-    uint fiplifo[NLIFO];
-    uint olifo[NLIFO];
+    // Metal may place dynamically indexed thread arrays in per-thread memory.
+    // Four-lane vectors keep this small rotating prefetch window in registers.
+    uint4 plifo;
+    uint4 fiplifo;
+    uint4 olifo;
 
     for (uint i = 0; i < NLIFO; ++i) {
-        pprimes += LSIZE;
-        poffset += LSIZE;
+        pprimes += lsize;
+        poffset += lsize;
 
         const uint2 tmp = *pprimes;
         plifo[i] = tmp.x;
@@ -263,9 +271,9 @@ inline void sieve_impl(
             }
         }
 
-        if (ip + NLIFO < SCOUNT / LSIZE) {
-            pprimes += LSIZE;
-            poffset += LSIZE;
+        if (ip + NLIFO < SCOUNT / lsize) {
+            pprimes += lsize;
+            poffset += lsize;
 
             const uint2 tmp = *pprimes;
             plifo[lpos] = tmp.x;
@@ -273,11 +281,10 @@ inline void sieve_impl(
             olifo[lpos] = *poffset;
         }
 
-        lpos++;
-        lpos = lpos % NLIFO;
+        lpos = (lpos + 1) & (NLIFO - 1);
     }
 
-    for (uint ip = SIEVERANGE3; ip < SCOUNT / LSIZE; ++ip) {
+    for (uint ip = SIEVERANGE3; ip < SCOUNT / lsize; ++ip) {
         const uint prime = plifo[lpos];
         const float fiprime = as_type<float>(fiplifo[lpos]);
         uint pos = olifo[lpos];
@@ -290,9 +297,9 @@ inline void sieve_impl(
         if (index < tileSize)
             atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[index], 1u << (pos % 32), memory_order_relaxed);
 
-        if (ip + NLIFO < SCOUNT / LSIZE) {
-            pprimes += LSIZE;
-            poffset += LSIZE;
+        if (ip + NLIFO < SCOUNT / lsize) {
+            pprimes += lsize;
+            poffset += lsize;
 
             const uint2 tmp = *pprimes;
             plifo[lpos] = tmp.x;
@@ -300,15 +307,14 @@ inline void sieve_impl(
             olifo[lpos] = *poffset;
         }
 
-        lpos++;
-        lpos = lpos % NLIFO;
+        lpos = (lpos + 1) & (NLIFO - 1);
     }
 
     // Synchronize and copy threadgroup memory to device memory
     threadgroup_barrier(mem_flags::mem_threadgroup);
     device uint* gsieve = &gsieve_all[
         SIZE * (STRIPES / 2 * line + stripe) + tile * tileSize];
-    for (uint i = id; i < tileSize; i += LSIZE) {
+    for (uint i = id; i < tileSize; i += lsize) {
         gsieve[i] = sieve_local[i];
     }
 }
