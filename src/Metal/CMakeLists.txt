@@ -64,6 +64,7 @@ set(CMAKE_OBJCXX_FLAGS "${CMAKE_OBJCXX_FLAGS} -fobjc-arc")
 include_directories(
     ${GMP_INCLUDE_DIRECTORY}
     ${OPENSSL_INCLUDE_DIR}
+    ${CURL_INCLUDE_DIRECTORY}
     ${JANSSON_INCLUDE_DIRECTORY}
     ${CMAKE_BINARY_DIR}
     ${CMAKE_SOURCE_DIR}
@@ -104,7 +105,11 @@ foreach(SHADER_FILE ${METAL_SHADER_SOURCES})
     add_custom_command(
         OUTPUT ${AIR_FILE}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/shaders
-        COMMAND xcrun -sdk macosx metal -c ${SHADER_FILE} -o ${AIR_FILE}
+        # Recent Xcode releases ship the Metal compiler as a separately
+        # installed toolchain.  Supplying -sdk macosx can select the legacy
+        # XcodeDefault launcher instead of that toolchain, even when the
+        # component is installed and visible to xcrun.
+        COMMAND xcrun metal -c ${SHADER_FILE} -o ${AIR_FILE}
         DEPENDS ${SHADER_FILE}
         COMMENT "Compiling Metal shader: ${SHADER_NAME}.metal"
     )
@@ -113,7 +118,7 @@ endforeach()
 # Link all .air files into a single .metallib
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/default.metallib
-    COMMAND xcrun -sdk macosx metallib ${METAL_AIR_FILES} -o ${CMAKE_CURRENT_BINARY_DIR}/default.metallib
+    COMMAND xcrun metallib ${METAL_AIR_FILES} -o ${CMAKE_CURRENT_BINARY_DIR}/default.metallib
     DEPENDS ${METAL_AIR_FILES}
     COMMENT "Creating Metal library: default.metallib"
 )
@@ -131,6 +136,7 @@ add_dependencies(xpmmetal metal_shaders)
 target_link_libraries(xpmmetal
     common
     blkmaker
+    ${CURL_LIBRARY}
     ${GMP_LIBRARY}
     ${OPENSSL_CRYPTO_LIBRARY}
     ${OPENSSL_SSL_LIBRARY}

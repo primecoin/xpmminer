@@ -103,8 +103,10 @@ inline void sha256_transform_thread(thread uint* state, thread uchar* block) {
 inline void sha256_from_midstate(thread uint* hash_out,
                                  constant uint* midstate,
                                  thread uchar* data,
-                                 uint len) {
+                                 uint len,
+                                 uint processedLen) {
     uint state[8];
+    const uint originalLen = len;
     for (int i = 0; i < 8; i++) {
         state[i] = midstate[i];
     }
@@ -138,9 +140,9 @@ inline void sha256_from_midstate(thread uint* hash_out,
     // Pad with zeros
     while (idx < 56) block[idx++] = 0;
 
-    // Append length in bits
-    // For JSON getwork: 128 bytes before midstate + remaining bytes
-    ulong bitlen = (128 + len) * 8;
+    // Include the prefix represented by the midstate and all bytes supplied
+    // here. `len` may have been reduced while processing complete blocks.
+    ulong bitlen = (ulong)(processedLen + originalLen) * 8;
     for (int i = 7; i >= 0; i--) {
         block[56 + i] = bitlen & 0xff;
         bitlen >>= 8;
@@ -163,6 +165,7 @@ inline void sha256_full(thread uint* hash_out, thread const uchar* data, uint le
 
     uchar block[64];
     uint idx = 0;
+    const uint originalLen = len;
 
     // Process complete blocks
     while (len >= 64) {
@@ -188,7 +191,7 @@ inline void sha256_full(thread uint* hash_out, thread const uchar* data, uint le
 
     while (idx < 56) block[idx++] = 0;
 
-    ulong bitlen = (len * 8);
+    ulong bitlen = (ulong)originalLen * 8;
     for (int i = 7; i >= 0; i--) {
         block[56 + i] = bitlen & 0xff;
         bitlen >>= 8;

@@ -1110,8 +1110,9 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     LOG_F(INFO, "GPU %d stopped.", mID);
 }
 
-void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
+void PrimeMiner::MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds) {
     cuCtxSetCurrent(_context);
+    const bool benchmarkMode = benchmarkSeconds > 0;
     time_t starttime = time(0);
     JsonWork currentWork;
     bool hasChanged;
@@ -1139,6 +1140,18 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
     time_t timeValidationLog = time(0); // For periodic validation logging
     uint64_t testCount = 0;
     uint64_t roundWorkId = 0; // Track work ID to detect stale work
+    uint64_t benchmarkHashesDispatched = 0;
+    uint64_t benchmarkGpuMatches = 0;
+    uint64_t benchmarkMatchesRetained = 0;
+    uint64_t benchmarkValidHashes = 0;
+    uint64_t benchmarkSieveJobs = 0;
+    uint64_t benchmarkSieveCandidates = 0;
+    uint64_t benchmarkFinalCandidates = 0;
+    uint64_t benchmarkCpuCandidates = 0;
+    uint64_t benchmarkShares = 0;
+    uint64_t benchmarkHashStarvations = 0;
+    uint64_t benchmarkPipelineErrors = 0;
+    std::chrono::steady_clock::time_point benchmarkStart;
 
     unsigned iteration = 0;
     mpz_class primorial[maxHashPrimorial];
@@ -1261,6 +1274,23 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
     LOG_F(INFO, "GPU %d: Starting getwork mining loop", mID);
 
+    if (benchmarkMode) {
+        currentWork.parentHash =
+            "0x38929713c8e87a2ec3bfded09d579788617788b5abacbe42c80161d8c1ebe22f";
+        currentWork.height = 3058000;
+        currentWork.difficulty = 10ull << 24;
+        currentWork.merkle =
+            "0x96cc5fa7338faeff2371f7216b0d14b11197105730ea8df9dc75b17a730d4db4";
+        currentWork.nonce = 0;
+        benchmarkStart = std::chrono::steady_clock::now();
+        LOG_F(
+            INFO,
+            "GPU %d: Starting %u-second end-to-end getwork benchmark "
+            "(deterministic work, network and submission excluded)",
+            mID,
+            benchmarkSeconds);
+    }
+
     while (run) {
         {
             time_t currtime = time(0);
@@ -1284,9 +1314,10 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         stats.cpd = 24. * 3600. * double(stats.fps) *
             pow(stats.primeprob, mConfig.TARGET);
 
-        // Get work from WebSocket context
-        bool reset = false;
-        {
+        // Get work from WebSocket context, or reset deterministic benchmark
+        // work on its first iteration.
+        bool reset = benchmarkMode && iteration == 0;
+        if (!benchmarkMode) {
             // Try to get work, but don't loop forever if disconnected
             int attempts = 0;
             static bool disconnectLogged =
@@ -1385,7 +1416,7 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         }
 
         // Check if work has changed during mining (detect stale work)
-        if (ctx->getWorkId() != roundWorkId) {
+        if (!benchmarkMode && ctx->getWorkId() != roundWorkId) {
             LOG_F(
                 WARNING,
                 "GPU %d: Work changed during mining, restarting round",
@@ -1400,6 +1431,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         if (numhash > 0) {
             // Align to mLSize boundary
             numhash += mLSize - numhash % mLSize;
+            if (benchmarkMode)
+                benchmarkHashesDispatched += (uint64_t)numhash;
 
             mJsonCountBuf[0] = 0;
             CUDA_SAFE_CALL(mJsonCountBuf.copyToDevice(mHMFermatStream));
@@ -1437,6 +1470,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             CUDA_SAFE_CALL(cuStreamSynchronize(mHMFermatStream));
 
             unsigned foundCount = mJsonCountBuf[0];
+            if (benchmarkMode)
+                benchmarkGpuMatches += foundCount;
             if (foundCount > 0) {
                 CUDA_SAFE_CALL(mJsonFoundBuf.copyToHost(mHMFermatStream));
                 CUDA_SAFE_CALL(mJsonPrimorialBuf.copyToHost(mHMFermatStream));
@@ -1444,6 +1479,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                 // Process found candidates
                 unsigned processCount = std::min(foundCount, 128u);
+                if (benchmarkMode)
+                    benchmarkMatchesRetained += processCount;
                 unsigned validCount = 0;
                 unsigned failedMinimum = 0;
                 unsigned failedDivisible = 0;
@@ -1565,6 +1602,9 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                     validCount++;
                 }
 
+                if (benchmarkMode)
+                    benchmarkValidHashes += validCount;
+
                 if (validCount > 0) {
                     CUDA_SAFE_CALL(hashBuf.copyToDevice(mSieveStream));
 
@@ -1600,6 +1640,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         // Sieve dispatch (reuses existing sieve kernels)
         for (unsigned i = 0; i < mSievePerRound; i++) {
             if (hashes.empty()) {
+                if (benchmarkMode)
+                    benchmarkHashStarvations++;
                 if (!reset) {
                     numHashCoeff += 32768;
                     LOG_F(
@@ -1611,6 +1653,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             }
 
             int hid = hashes.pop();
+            if (benchmarkMode)
+                benchmarkSieveJobs++;
             unsigned primorialIdx = hashes.get(hid).primorialIdx;
 
             CUDA_SAFE_CALL(
@@ -1713,6 +1757,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         int numcandis = final.count[0];
         numcandis = std::min(numcandis, (int) final.info._size);
         numcandis = std::max(numcandis, 0);
+        if (benchmarkMode)
+            benchmarkFinalCandidates += (uint64_t)numcandis;
         candis.resize(numcandis);
         primeCount += numcandis;
         if (numcandis)
@@ -1721,6 +1767,7 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
         final.count[0] = 0;
         CUDA_SAFE_CALL(final.count.copyToDevice(mHMFermatStream));
+        const uint64_t benchmarkFermatBefore = fermatCount;
         FermatDispatch(
             fermat320,
             sieveBuffers,
@@ -1743,6 +1790,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             fermatCount,
             mFermatKernel352,
             mSievePerRound);
+        if (benchmarkMode)
+            benchmarkSieveCandidates += fermatCount - benchmarkFermatBefore;
 
         CUDA_SAFE_CALL(cuEventSynchronize(sieveEvent));
         for (unsigned i = 0; i < mSievePerRound; i++)
@@ -1796,9 +1845,16 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                 nOrigin *= multi;
 
                 testParams.nCandidateType = candi.type + 1;
-                bool isblock =
-                    ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
+                if (benchmarkMode)
+                    benchmarkCpuCandidates++;
+                // Independently verify the GPU-tested prefix in benchmark
+                // mode. Starting at mDepth would trust the result and make
+                // the pipeline-error counter unable to detect a bad prefix.
+                bool isblock = ProbablePrimeChainTestFastCuda(
+                    nOrigin, testParams, benchmarkMode ? 0 : mDepth);
                 unsigned chainlength = TargetGetLength(testParams.nChainLength);
+                if (benchmarkMode && chainlength < mDepth)
+                    benchmarkPipelineErrors++;
 
                 // Update chain stats
                 if (chainlength > 0) {
@@ -1858,6 +1914,10 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                 ProbablePrimeChainTestFastCuda(nOrigin, testParams, mDepth);
                 if (testParams.nChainLength >= currentWork.difficulty) {
+                    if (benchmarkMode) {
+                        benchmarkShares++;
+                        continue;
+                    }
                     printf(
                         "\ncandis[%d] = %s\n", i, nOrigin.get_str(10).c_str());
 
@@ -1946,21 +2006,78 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         mineCtx.speed = (double)testCount / 1000000.0;
         mineCtx.totalRoundsNum++;
 
-        // Print mining stats
-        MineContext* mineCtxArray = &mineCtx;
-        printMiningStats(
-            workBeginPoint,
-            mineCtxArray,
-            1,
-            sieveSizeInGb,
-            currentWork.height,
-            GetPrimeDifficulty(currentWork.difficulty),
-            4);
+        if (!benchmarkMode) {
+            MineContext* mineCtxArray = &mineCtx;
+            printMiningStats(
+                workBeginPoint,
+                mineCtxArray,
+                1,
+                sieveSizeInGb,
+                currentWork.height,
+                GetPrimeDifficulty(currentWork.difficulty),
+                4);
+        }
 
         if (MakeExit)
             break;
 
         iteration++;
+
+        if (benchmarkMode) {
+            const double elapsed = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - benchmarkStart).count();
+            if (elapsed >= benchmarkSeconds) {
+                const double sieveRange =
+                    (double)mConfig.SIZE * 32.0 * mConfig.STRIPES;
+                const double retainedPercent = benchmarkGpuMatches == 0 ? 100.0 :
+                    100.0 * (double)benchmarkMatchesRetained /
+                        (double)benchmarkGpuMatches;
+                LOG_F(INFO, "");
+                LOG_F(INFO, "=== End-to-end blocktree.get_work benchmark (CUDA) ===");
+                LOG_F(INFO,
+                      "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
+                      "LSIZE=%u, sieves/round=%u, Fermat batch=%u, "
+                      "hash coefficient=%u",
+                      mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT,
+                      mLSize, mSievePerRound, mBlockSize, numHashCoeff);
+                LOG_F(INFO,
+                      "Wall time: %.3f s, loop iterations: %u, sieve jobs: %llu",
+                      elapsed, iteration,
+                      (unsigned long long)benchmarkSieveJobs);
+                LOG_F(INFO,
+                      "JSON hashes dispatched: %.3f M/s (%llu total)",
+                      benchmarkHashesDispatched / elapsed / 1000000.0,
+                      (unsigned long long)benchmarkHashesDispatched);
+                LOG_F(INFO,
+                      "GPU hash matches: %.1f/s; retained for CPU: %.1f/s "
+                      "(%.4f%% retained)",
+                      benchmarkGpuMatches / elapsed,
+                      benchmarkMatchesRetained / elapsed,
+                      retainedPercent);
+                LOG_F(INFO,
+                      "CPU-validated hashes feeding sieve: %.1f/s",
+                      benchmarkValidHashes / elapsed);
+                LOG_F(INFO,
+                      "Effective end-to-end sieve scan: %.3f G/s",
+                      sieveRange * benchmarkSieveJobs / elapsed / 1000000000.0);
+                LOG_F(INFO,
+                      "Sieve candidates feeding Fermat: %.1f/s (%llu total)",
+                      benchmarkSieveCandidates / elapsed,
+                      (unsigned long long)benchmarkSieveCandidates);
+                LOG_F(INFO,
+                      "Final GPU candidates: %.1f/s; CPU chain checks: %.1f/s; "
+                      "shares meeting target: %llu",
+                      benchmarkFinalCandidates / elapsed,
+                      benchmarkCpuCandidates / elapsed,
+                      (unsigned long long)benchmarkShares);
+                LOG_F(INFO,
+                      "Hash-starved loop iterations: %llu; pipeline validation errors: %llu",
+                      (unsigned long long)benchmarkHashStarvations,
+                      (unsigned long long)benchmarkPipelineErrors);
+                LOG_F(INFO, "=======================================================");
+                break;
+            }
+        }
     }
 
     LOG_F(INFO, "GPU %d stopped.", mID);
@@ -1992,6 +2109,7 @@ enum CmdLineOptions {
     clDebug = 0,
     clThreadsNum,
     clBenchmark,
+    clMiningBenchmark,
     clExtensionsNum,
     clPrimorial,
     clSieveSize,
@@ -2014,6 +2132,8 @@ void printHelpMessage() {
     printf("  xpmclminer <arguments>\n\n");
     printf("  -h or --help: show this help message\n");
     printf("  -b or --benchmark: run benchmark and exit\n");
+    printf(
+        "  --mining-benchmark <seconds>: run the real blocktree.get_work mining pipeline offline\n");
     printf(
         "  -o or --url <HostAddress:port>: address of primecoin RPC client, default: %s\n",
         gUrl);
@@ -2049,6 +2169,8 @@ void initCmdLineOptions(option* options) {
     options[clDebug] = {"debug", no_argument, 0, 0};
     options[clThreadsNum] = {"threads", required_argument, &gThreadsNum, 0};
     options[clBenchmark] = {"benchmark", no_argument, 0, 'b'};
+    options[clMiningBenchmark] = {
+        "mining-benchmark", required_argument, 0, 0};
     options[clExtensionsNum] = {
         "extensions-num", required_argument, &gExtensionsNum, 0};
     options[clPrimorial] = {"primorial", required_argument, &gPrimorial, 0};
@@ -2092,6 +2214,7 @@ int main(int argc, char** argv) {
     PrimeSource primeSource(10000000, gWeaveDepth + 256);
     option gOptions[clOptionsNum];
     bool isBenchmark = false;
+    unsigned miningBenchmarkSeconds = 0;
     int index = 0, c;
     initCmdLineOptions(gOptions);
     const char* platform = "NVIDIA CUDA";
@@ -2102,6 +2225,10 @@ int main(int argc, char** argv) {
                 switch (index) {
                     case clDebug:
                         gDebug = 1;
+                        break;
+                    case clMiningBenchmark:
+                        miningBenchmarkSeconds =
+                            (unsigned)strtoul(optarg, nullptr, 10);
                         break;
                     case clExtensionsNum:
                         gExtensionsNum = atoi(optarg);
@@ -2158,32 +2285,44 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Validate protocol selection
-    bool useGetWork = false;
-    if (strcmp(gProtocol, "getwork") == 0) {
-        useGetWork = true;
-        if (!gWsUrl && !isBenchmark) {
-            fprintf(stderr, "Error: --ws-url required for getwork protocol\n");
-            printHelpMessage();
-            exit(1);
-        }
-    } else if (strcmp(gProtocol, "getblocktemplate") != 0) {
+    if (isBenchmark && miningBenchmarkSeconds > 0) {
         fprintf(
             stderr,
-            "Error: --protocol must be either 'getblocktemplate' or 'getwork'\n");
-        printHelpMessage();
+            "Error: choose either --benchmark or --mining-benchmark\n");
         exit(1);
     }
 
+    // Validate protocol selection
+    bool useGetWork = miningBenchmarkSeconds > 0;
+    if (miningBenchmarkSeconds == 0) {
+        if (strcmp(gProtocol, "getwork") == 0) {
+            useGetWork = true;
+            if (!gWsUrl && !isBenchmark) {
+                fprintf(stderr, "Error: --ws-url required for getwork protocol\n");
+                printHelpMessage();
+                exit(1);
+            }
+        } else if (strcmp(gProtocol, "getblocktemplate") != 0) {
+            fprintf(
+                stderr,
+                "Error: --protocol must be either 'getblocktemplate' or 'getwork'\n");
+            printHelpMessage();
+            exit(1);
+        }
+    }
+
     // Wallet is only required for getblocktemplate protocol
-    if (!gWallet && !isBenchmark && !useGetWork) {
+    if (!gWallet && !isBenchmark && miningBenchmarkSeconds == 0 &&
+        !useGetWork) {
         fprintf(stderr, "Error: you must specify wallet\n");
         printHelpMessage();
         exit(1);
     }
 
     printf("block sum is %d\n", gThreadsNum);
-    printf("Using protocol: %s\n", gProtocol);
+    printf(
+        "Using protocol: %s\n",
+        miningBenchmarkSeconds > 0 ? "blocktree.get_work benchmark" : gProtocol);
 
     // Log experimental feature status
     if (gSubmitAllChains) {
@@ -2201,7 +2340,7 @@ int main(int argc, char** argv) {
     SubmitContext* submit = nullptr;
     GetWorkContext* getwork = nullptr;
 
-    if (!isBenchmark) {
+    if (!isBenchmark && miningBenchmarkSeconds == 0) {
         if (useGetWork) {
             // getwork protocol - WebSocket-based
             getwork = new GetWorkContext(0, gWsUrl);
@@ -2382,7 +2521,7 @@ int main(int argc, char** argv) {
 
         if (useGetWork) {
             // JSON getwork protocol
-            miner->MiningGetWork(getwork);
+            miner->MiningGetWork(getwork, miningBenchmarkSeconds);
         } else {
             // getblocktemplate protocol (existing)
             miner->Mining(getblock, submit);

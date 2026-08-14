@@ -86,21 +86,26 @@ inline void sieve_impl(
     uint tid,
     uint gid)
 {
-    // Calculate 2D indices from flattened threadgroup grid
-    // gid is the threadgroup index (0 to (STRIPES/2)*WIDTH - 1)
-    // Each threadgroup processes one (stripe, line) combination
+    // Apple GPUs expose at most 32 KiB of threadgroup memory. A logical HIP
+    // SIZE=12288 stripe therefore runs as two 6144-word local-memory tiles.
+    // The output remains one contiguous logical stripe for s_sieve.
     const uint id = tid;
-    const uint stripe = gid % (STRIPES / 2);
-    const uint line = gid / (STRIPES / 2);
+    const uint tileCount = SIZE > 8192 ? 2 : 1;
+    const uint tileSize = SIZE / tileCount;
+    const uint logicalGid = gid / tileCount;
+    const uint tile = gid % tileCount;
+    const uint stripe = logicalGid % (STRIPES / 2);
+    const uint line = logicalGid / (STRIPES / 2);
 
     // Single-pass sieve: entry calculation matches HIP
-    const uint entry = SIZE * 32 * (stripe + STRIPES / 2);
+    const uint entry = SIZE * 32 * (stripe + STRIPES / 2) +
+                       tile * tileSize * 32;
     const float fentry = float(entry);  // Convert value to float, NOT reinterpret bits
 
     device uint* offset = &offset_all[PCOUNT * line];
 
     // Initialize threadgroup sieve to zeros
-    for (uint i = id; i < SIZE; i += LSIZE) {
+    for (uint i = id; i < tileSize; i += LSIZE) {
         sieve_local[i] = 0;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -140,7 +145,7 @@ inline void sieve_impl(
             threadgroup atomic_uint* s2 = (threadgroup atomic_uint*)&sieve_local[vpos.y >> 5];
             threadgroup atomic_uint* s3 = (threadgroup atomic_uint*)&sieve_local[vpos.z >> 5];
             threadgroup atomic_uint* s4 = (threadgroup atomic_uint*)&sieve_local[vpos.w >> 5];
-            threadgroup atomic_uint* se = (threadgroup atomic_uint*)&sieve_local[SIZE];
+            threadgroup atomic_uint* se = (threadgroup atomic_uint*)&sieve_local[tileSize];
             uint bit1 = orb << (vpos.x % 32);
             uint bit2 = orb << (vpos.y % 32);
             uint bit3 = orb << (vpos.z % 32);
@@ -165,7 +170,7 @@ inline void sieve_impl(
                 atomic_fetch_or_explicit(s3, bit3, memory_order_relaxed);
         } else {
             const uint add = var * 4 * prime;
-            while (vpos.w < SIZE * 32) {
+            while (vpos.w < tileSize * 32) {
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[vpos.x >> 5], orb << (vpos.x % 32), memory_order_relaxed);
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[vpos.y >> 5], orb << (vpos.y % 32), memory_order_relaxed);
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[vpos.z >> 5], orb << (vpos.z % 32), memory_order_relaxed);
@@ -176,11 +181,11 @@ inline void sieve_impl(
                 vpos.w += add;
             }
 
-            if (vpos.x < SIZE * 32)
+            if (vpos.x < tileSize * 32)
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[vpos.x >> 5], orb << (vpos.x % 32), memory_order_relaxed);
-            if (vpos.y < SIZE * 32)
+            if (vpos.y < tileSize * 32)
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[vpos.y >> 5], orb << (vpos.y % 32), memory_order_relaxed);
-            if (vpos.z < SIZE * 32)
+            if (vpos.z < tileSize * 32)
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[vpos.z >> 5], orb << (vpos.z % 32), memory_order_relaxed);
         }
     }
@@ -220,40 +225,40 @@ inline void sieve_impl(
             uint2 vpos = {pos, pos + prime};
 
             const uint add = 2 * prime;
-            while (vpos.y < SIZE * 32) {
+            while (vpos.y < tileSize * 32) {
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[vpos.x >> 5], 1u << (vpos.x % 32), memory_order_relaxed);
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[vpos.y >> 5], 1u << (vpos.y % 32), memory_order_relaxed);
                 vpos.x += add;
                 vpos.y += add;
             }
 
-            if (vpos.x < SIZE * 32)
+            if (vpos.x < tileSize * 32)
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[vpos.x >> 5], 1u << (vpos.x % 32), memory_order_relaxed);
         } else if (ip < SIEVERANGE2) {
-            if (index < SIZE) {
+            if (index < tileSize) {
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[index], 1u << (pos % 32), memory_order_relaxed);
                 pos += prime;
                 index = pos >> 5;
-                if (index < SIZE) {
+                if (index < tileSize) {
                     atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[index], 1u << (pos % 32), memory_order_relaxed);
                     pos += prime;
                     index = pos >> 5;
-                    if (index < SIZE) {
+                    if (index < tileSize) {
                         atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[index], 1u << (pos % 32), memory_order_relaxed);
                     }
                 }
             }
         } else if (ip < SIEVERANGE3) {
-            if (index < SIZE) {
+            if (index < tileSize) {
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[index], 1u << (pos % 32), memory_order_relaxed);
                 pos += prime;
                 index = pos >> 5;
-                if (index < SIZE) {
+                if (index < tileSize) {
                     atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[index], 1u << (pos % 32), memory_order_relaxed);
                 }
             }
         } else {
-            if (index < SIZE) {
+            if (index < tileSize) {
                 atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[index], 1u << (pos % 32), memory_order_relaxed);
             }
         }
@@ -282,7 +287,7 @@ inline void sieve_impl(
         pos += ((int)pos < 0 ? prime : 0);
 
         uint index = pos >> 5;
-        if (index < SIZE)
+        if (index < tileSize)
             atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[index], 1u << (pos % 32), memory_order_relaxed);
 
         if (ip + NLIFO < SCOUNT / LSIZE) {
@@ -301,8 +306,9 @@ inline void sieve_impl(
 
     // Synchronize and copy threadgroup memory to device memory
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    device uint* gsieve = &gsieve_all[SIZE * (STRIPES / 2 * line + stripe)];
-    for (uint i = id; i < SIZE; i += LSIZE) {
+    device uint* gsieve = &gsieve_all[
+        SIZE * (STRIPES / 2 * line + stripe) + tile * tileSize];
+    for (uint i = id; i < tileSize; i += LSIZE) {
         gsieve[i] = sieve_local[i];
     }
 }

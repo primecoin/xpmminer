@@ -138,7 +138,10 @@ inline uint rotl(uint x, uint n) {
 // Integer inversion using extended Euclidean algorithm
 // Used for modular arithmetic in sieve
 inline uint int_invert(uint a, uint modulus) {
-    int u = 1, v = 0;
+    // Coefficients for (modulus, a).  The old 1,0 initialization returned
+    // the coefficient of the modulus instead of the inverse of a, producing
+    // invalid sieve offsets for almost every prime.
+    int u = 0, v = 1;
     uint b = modulus;
 
     while (a) {

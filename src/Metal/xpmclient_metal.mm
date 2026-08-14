@@ -17,6 +17,7 @@
 #include <chrono>
 #include <algorithm>
 #include <set>
+#include <openssl/bn.h>
 
 // Include these last to avoid macro conflicts
 #include "system.h"
@@ -36,52 +37,26 @@ int gMetalStripes = 210;
 static bool gMetalAutoTune = true;
 static bool gMetalConfigExplicit = false;
 
-static const char* gWsUrl = nullptr;
-std::vector<unsigned> gPrimes2;
+static uint32_t metalSieveTileCount(uint32_t logicalWords) {
+    return logicalWords > 8192 ? 2 : 1;
+}
 
-// Test mode configuration
-static const char* gTestDumpDir = nullptr;
-static const char* gTestJsonFile = nullptr;
-static uint64_t gTestNonce = 0;
-static bool gTestMode = false;
+static uint32_t metalSieveTileWords(uint32_t logicalWords) {
+    return logicalWords / metalSieveTileCount(logicalWords);
+}
+
+static const char* gWsUrl = nullptr;
+static const char* gProtocol = "getwork";
+static const char* gRpcUrl = "127.0.0.1:9912";
+static const char* gRpcUser = nullptr;
+static const char* gRpcPassword = nullptr;
+static const char* gWallet = nullptr;
+static unsigned gWorkerId = 0;
+std::vector<unsigned> gPrimes2;
 
 // Experimental: Submit all chain types (Cunningham1, Cunningham2, BiTwin) instead of just BiTwin
 static bool gSubmitAllChains = false;
 static bool gBenchmarkFailed = false;
-
-//=============================================================================
-// Test Mode Helper Functions (forward declarations and implementations)
-//=============================================================================
-
-// Dump buffer to binary file
-void dumpBuffer(const char* filename, const void* data, size_t size) {
-    if (!gTestMode || !gTestDumpDir) return;
-
-    char path[512];
-    snprintf(path, sizeof(path), "%s/round_0/%s", gTestDumpDir, filename);
-
-    FILE* f = fopen(path, "wb");
-    if (!f) {
-        fprintf(stderr, "Warning: Failed to create dump file: %s\n", path);
-        return;
-    }
-
-    if (fwrite(data, 1, size, f) != size) {
-        fprintf(stderr, "Warning: Failed to write dump file: %s\n", path);
-    }
-
-    fclose(f);
-}
-
-// Dump Metal buffer to binary file
-void dumpMetalBuffer(const char* filename, id<MTLBuffer> buffer, size_t size) {
-    if (!gTestMode || !buffer) return;
-    dumpBuffer(filename, [buffer contents], size);
-}
-
-//=============================================================================
-// Forward declarations
-bool loadJsonWorkFromFile(const char* filename, JsonWork& work);
 
 //=============================================================================
 // JSON midstate preparation
@@ -133,9 +108,22 @@ void prepareJsonMidstate(const JsonWork& work, JsonMidstateData* data) {
     }
 }
 
+static void bytesToHex(const void* data, size_t size, char* output) {
+    static const char digits[] = "0123456789abcdef";
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < size; ++i) {
+        output[i * 2] = digits[bytes[i] >> 4];
+        output[i * 2 + 1] = digits[bytes[i] & 0x0f];
+    }
+    output[size * 2] = '\0';
+}
+
 //=============================================================================
 // PrimeMiner Implementation
 //=============================================================================
+
+static_assert(sizeof(PrimeMiner::block_t) == 80,
+              "Primecoin block headers must remain exactly 80 bytes");
 
 PrimeMiner::PrimeMiner(unsigned id, unsigned threads, unsigned sievePerRound,
                        unsigned depth, unsigned LSize) {
@@ -157,6 +145,8 @@ mLSize = LSize;
     _library = nil;
 
     _jsonHashModPipeline = nil;
+    _blockHashModPipeline = nil;
+    _blockHashDebugPipeline = nil;
     _sieveSetupPipeline = nil;
     _sievePipeline = nil;
     _sieveDynamicPipeline = nil;
@@ -268,7 +258,7 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
         LOG_F(WARNING, "FermatDispatch: Clamping leftover copy from %u to %u candidates",
               left, safeLeft);
     }
-    if (safeLeft > 0 && fermat.bsize > 0) {
+    if (safeLeft > 0) {
         //LOG_F(INFO, "FermatDispatch: Copying %u untested leftovers from widx (original count=%u, tested=%u) at offset %u",
 //              left, widx_original_count, fermat.bsize, fermat.bsize);
         id<MTLCommandBuffer> copyBuffer = [_commandQueue commandBuffer];
@@ -283,8 +273,6 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
         [copyBuffer waitUntilCompleted];
         count += safeLeft;
     }
-
-    fermat.bsize = 0;  // Reset bsize from previous iteration
 
     // Collect candidates from all sieves
 
@@ -321,15 +309,19 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
         reportedAvail = 0;
     }
 
+    // The previous source buffer has now either been tested or copied into
+    // ridx. Clear it on every iteration, including when bsize was zero. This
+    // mirrors HIP and prevents stale counts from being reused on the next
+    // ping-pong flip.
+    fermat.buffer[widx].count[0] = 0;
+    fermat.buffer[widx].count.copyToDevice();
+    fermat.bsize = 0;
+
     // Copy updated count back to device (we've been accumulating in host memory)
     fermat.buffer[ridx].count.copyToDevice();
 
     // Run Fermat tests if we have enough candidates
     if (count > mBlockSize) {
-        // Reset widx count buffer on device for check_fermat kernel
-        fermat.buffer[widx].count[0] = 0;
-        fermat.buffer[widx].count.copyToDevice();
-
         fermat.bsize = count - (count % mBlockSize);
 
         // CRITICAL: Cap fermat.bsize to buffer capacity to prevent overflow
@@ -363,9 +355,9 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
         // NEW: Debug - copy fermat.input buffer to host to inspect prime candidates
         // This will show us the actual numbers being tested
         [encoder endEncoding];
-        [fermatCommandBuffer commit];
-        [fermatCommandBuffer waitUntilCompleted];
         if (gDebug) {
+            [fermatCommandBuffer commit];
+            [fermatCommandBuffer waitUntilCompleted];
             LOG_F(INFO, "FermatDispatch: setup_fermat completed, copying fprimes buffer to inspect");
         }
 
@@ -404,7 +396,12 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
 
 
         // Resume command buffer
-        fermatCommandBuffer = [_commandQueue commandBuffer];
+        // In normal mining, keep setup, test, and check in one command buffer.
+        // Separate encoders preserve the resource dependency while avoiding two
+        // CPU/GPU round trips. Debug mode retains the waits because it reads the
+        // intermediate buffers below.
+        if (gDebug)
+            fermatCommandBuffer = [_commandQueue commandBuffer];
         encoder = [fermatCommandBuffer computeCommandEncoder];
 
         // 2. Run Fermat test kernel (320 or 352)
@@ -421,9 +418,9 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
 
         // NEW: Copy Fermat test results to check all chainpos levels (matching HIP debug)
         [encoder endEncoding];
-        [fermatCommandBuffer commit];
-        [fermatCommandBuffer waitUntilCompleted];
         if (gDebug) {
+            [fermatCommandBuffer commit];
+            [fermatCommandBuffer waitUntilCompleted];
             LOG_F(INFO, "FermatDispatch: Fermat kernel completed, copying results to inspect");
         }
 
@@ -497,7 +494,8 @@ void PrimeMiner::FermatDispatch(pipeline_t& fermat,
         }
 
         // Resume command buffer
-        fermatCommandBuffer = [_commandQueue commandBuffer];
+        if (gDebug)
+            fermatCommandBuffer = [_commandQueue commandBuffer];
         encoder = [fermatCommandBuffer computeCommandEncoder];
 
         // 3. Check Fermat results
@@ -658,9 +656,66 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
             return false;
         }
 
+        // Developer override for machines that have the runtime Metal
+        // compiler but not the command-line `metal` tool.  This lets a
+        // corrected JSON hash kernel be tested without rebuilding the full
+        // metallib; all other pipelines still come from default.metallib.
+        id<MTLLibrary> jsonHashLibrary = _library;
+        NSString* shaderSourceDir =
+            [[[NSProcessInfo processInfo] environment]
+                objectForKey:@"XPM_METAL_SHADER_SOURCE_DIR"];
+        if ([shaderSourceDir length] > 0) {
+            NSMutableString* source = [NSMutableString string];
+            NSArray<NSString*>* sourceNames = @[
+                @"common.metal", @"sha256.metal", @"json_hashmod.metal",
+                @"sieve.metal"
+            ];
+            for (NSString* sourceName in sourceNames) {
+                NSString* sourcePath =
+                    [shaderSourceDir stringByAppendingPathComponent:sourceName];
+                NSError* readError = nil;
+                NSString* part = [NSString stringWithContentsOfFile:sourcePath
+                                                            encoding:NSUTF8StringEncoding
+                                                               error:&readError];
+                if (!part) {
+                    LOG_F(ERROR, "Failed to read Metal shader source %s: %s",
+                          [sourcePath UTF8String],
+                          [[readError localizedDescription] UTF8String]);
+                    return false;
+                }
+                NSMutableString* expanded = [part mutableCopy];
+                [expanded replaceOccurrencesOfString:@"#include \"common.metal\""
+                                           withString:@""
+                                              options:0
+                                                range:NSMakeRange(0, [expanded length])];
+                [expanded replaceOccurrencesOfString:@"#include \"sha256.metal\""
+                                           withString:@""
+                                              options:0
+                                                range:NSMakeRange(0, [expanded length])];
+                [source appendString:expanded];
+                [source appendString:@"\n"];
+            }
+
+            MTLCompileOptions* compileOptions = [MTLCompileOptions new];
+            compileOptions.fastMathEnabled = YES;
+            NSError* compileError = nil;
+            jsonHashLibrary = [device newLibraryWithSource:source
+                                                   options:compileOptions
+                                                     error:&compileError];
+            if (!jsonHashLibrary) {
+                LOG_F(ERROR, "Runtime Metal JSON shader compilation failed: %s",
+                      [[compileError localizedDescription] UTF8String]);
+                return false;
+            }
+            LOG_F(INFO, "Runtime-compiled JSON hash and sieve shaders from: %s",
+                  [shaderSourceDir UTF8String]);
+        }
+
         // Create compute pipeline states
-        auto createPipeline = [&](NSString* name) -> id<MTLComputePipelineState> {
-            id<MTLFunction> function = [_library newFunctionWithName:name];
+        auto createPipelineFromLibrary = [&] (
+            id<MTLLibrary> library,
+            NSString* name) -> id<MTLComputePipelineState> {
+            id<MTLFunction> function = [library newFunctionWithName:name];
             if (!function) {
                 LOG_F(ERROR, "Failed to find function: %s", [name UTF8String]);
                 return nil;
@@ -677,12 +732,23 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
 
             return pipeline;
         };
+        auto createPipeline = [&] (NSString* name) -> id<MTLComputePipelineState> {
+            return createPipelineFromLibrary(_library, name);
+        };
 
-        _jsonHashModPipeline = createPipeline(@"jsonHashMod");
-        _sieveSetupPipeline = createPipeline(@"setup_sieve");
-        _sievePipeline = createPipeline(@"sieve");
-        _sieveDynamicPipeline = createPipeline(@"sieve_dynamic");
-        _sieveSearchPipeline = createPipeline(@"s_sieve");
+        _jsonHashModPipeline =
+            createPipelineFromLibrary(jsonHashLibrary, @"jsonHashMod");
+        _blockHashModPipeline =
+            createPipelineFromLibrary(jsonHashLibrary, @"blockHashMod");
+        _blockHashDebugPipeline =
+            createPipelineFromLibrary(jsonHashLibrary, @"blockHashDebug");
+        _sieveSetupPipeline =
+            createPipelineFromLibrary(jsonHashLibrary, @"setup_sieve");
+        _sievePipeline = createPipelineFromLibrary(jsonHashLibrary, @"sieve");
+        _sieveDynamicPipeline =
+            createPipelineFromLibrary(jsonHashLibrary, @"sieve_dynamic");
+        _sieveSearchPipeline =
+            createPipelineFromLibrary(jsonHashLibrary, @"s_sieve");
         _fermatSetupPipeline = createPipeline(@"setup_fermat");
         _fermatKernel320Pipeline = createPipeline(@"fermat_kernel320");
         _fermatKernel352Pipeline = createPipeline(@"fermat_kernel352");
@@ -702,7 +768,9 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
                   (unsigned long)[_sievePipeline staticThreadgroupMemoryLength]);
         }
 
-        if (!_jsonHashModPipeline || !_sieveSetupPipeline || !_sievePipeline ||
+        if (!_jsonHashModPipeline || !_blockHashModPipeline ||
+            !_blockHashDebugPipeline ||
+            !_sieveSetupPipeline || !_sievePipeline ||
             !_sieveDynamicPipeline || !_sieveSearchPipeline || !_fermatSetupPipeline ||
             !_fermatKernel320Pipeline || !_fermatKernel352Pipeline ||
             !_fermatCheckPipeline) {
@@ -740,7 +808,7 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         // PCOUNT is configurable via --prime-count parameter
         mConfig.PCOUNT = gPrimeCount;
         const NSUInteger requiredThreadgroupMemory =
-            (NSUInteger)mConfig.SIZE * sizeof(uint32_t);
+            (NSUInteger)metalSieveTileWords(mConfig.SIZE) * sizeof(uint32_t);
         if (requiredThreadgroupMemory > device.maxThreadgroupMemoryLength) {
             LOG_F(ERROR,
                   "Metal sieve requires %lu bytes of threadgroup memory, device supports %lu",
@@ -758,9 +826,11 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         mConfig.LIMIT14 = 28;
         mConfig.LIMIT15 = 31;
 
-        // Set block size based on GPU capabilities
-        // For Apple Silicon, use a reasonable default
-        mBlockSize = 256 * 4 * 64;  // Similar to HIP: CUs * 4 * 64
+        // Metal does not expose a HIP-style compute-unit count.  The old value
+        // assumed 256 CUs and delayed every Fermat stage until 65,536
+        // candidates had accumulated.  Sixteen 256-thread groups provide a
+        // useful GPU batch without adding that multi-iteration latency.
+        mBlockSize = 16 * 256;
         LOG_F(INFO, "GPU %d: Block size = %u", mID, mBlockSize);
 
         LOG_F(INFO, "Metal GPU %d initialized successfully", mID);
@@ -1584,10 +1654,96 @@ void metalFermatCompactionBenchmark(id<MTLDevice> device,
     }
 }
 
-// Hashmod benchmark - DISABLED (will be added with getblocktemplate support)
 void metalHashmodBenchmark(PrimeMiner* miner) {
     @autoreleasepool {
-        // Skipped - will be implemented when getblocktemplate support is added
+        constexpr uint32_t testCount = 4096;
+        constexpr uint32_t nonceOffset = 0x10203040u;
+
+        PrimeMiner::block_t header{};
+        header.version = PrimeMiner::block_t::CURRENT_VERSION;
+        header.hashPrevBlock.SetHex(
+            "38929713c8e87a2ec3bfded09d579788617788b5abacbe42c80161d8c1ebe22f");
+        header.hashMerkleRoot.SetHex(
+            "96cc5fa7338faeff2371f7216b0d14b11197105730ea8df9dc75b17a730d4db4");
+        header.time = 1786663373u;
+        header.bits = 10u << 24;
+        header.nonce = nonceOffset;
+
+        uint32_t midstate[8];
+        sha256precalcData precalc{};
+        precalcSHA256(&header, midstate, &precalc);
+
+        id<MTLBuffer> midstateBuffer = [miner->_device
+            newBufferWithBytes:midstate
+                        length:sizeof(midstate)
+                       options:MTLResourceStorageModeShared];
+        id<MTLBuffer> outputBuffer = [miner->_device
+            newBufferWithLength:(size_t)testCount * 8 * sizeof(uint32_t)
+                        options:MTLResourceStorageModeShared];
+        if (!midstateBuffer || !outputBuffer) {
+            LOG_F(ERROR, "Block hash correctness: buffer allocation failed");
+            gBenchmarkFailed = true;
+            return;
+        }
+
+        id<MTLCommandBuffer> command = [miner->_commandQueue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder =
+            [command computeCommandEncoder];
+        [encoder setComputePipelineState:miner->_blockHashDebugPipeline];
+        [encoder setBytes:&nonceOffset length:sizeof(nonceOffset) atIndex:0];
+        [encoder setBuffer:midstateBuffer offset:0 atIndex:1];
+        [encoder setBytes:&precalc.merkle
+                   length:sizeof(precalc.merkle) atIndex:2];
+        [encoder setBytes:&precalc.time
+                   length:sizeof(precalc.time) atIndex:3];
+        [encoder setBytes:&precalc.nbits
+                   length:sizeof(precalc.nbits) atIndex:4];
+        [encoder setBuffer:outputBuffer offset:0 atIndex:5];
+        const NSUInteger groupSize = std::min<NSUInteger>(
+            256, [miner->_blockHashDebugPipeline
+                     maxTotalThreadsPerThreadgroup]);
+        [encoder dispatchThreads:MTLSizeMake(testCount, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(groupSize, 1, 1)];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.status != MTLCommandBufferStatusCompleted) {
+            LOG_F(ERROR, "Block hash correctness command failed: %s",
+                  command.error ?
+                      [[command.error localizedDescription] UTF8String] :
+                      "unknown error");
+            gBenchmarkFailed = true;
+            return;
+        }
+
+        const uint32_t* gpuHashes =
+            static_cast<const uint32_t*>(outputBuffer.contents);
+        for (uint32_t index = 0; index < testCount; ++index) {
+            PrimeMiner::block_t candidate = header;
+            candidate.nonce = nonceOffset + index;
+            uint256 cpuHash;
+            SHA_256 sha;
+            sha.init();
+            sha.update((const unsigned char*)&candidate, sizeof(candidate));
+            sha.final((unsigned char*)&cpuHash);
+            sha.init();
+            sha.update((const unsigned char*)&cpuHash, sizeof(cpuHash));
+            sha.final((unsigned char*)&cpuHash);
+
+            uint32_t cpuLimbs[8];
+            memcpy(cpuLimbs, &cpuHash, sizeof(cpuLimbs));
+            if (memcmp(cpuLimbs, gpuHashes + (size_t)index * 8,
+                       sizeof(cpuLimbs)) != 0) {
+                LOG_F(ERROR,
+                      "Block hash correctness: FAILED at nonce %u",
+                      candidate.nonce);
+                gBenchmarkFailed = true;
+                return;
+            }
+        }
+        LOG_F(INFO,
+              "Block hash correctness: PASS (%u CPU/GPU double-SHA256 matches)",
+              testCount);
     }
 }
 
@@ -1716,7 +1872,112 @@ bool sieveResultsTest(uint32_t *primes,
 // Sieve check benchmark - validates GPU sieve correctness vs CPU
 void metalSieveCheckBenchmark(PrimeMiner* miner) {
     @autoreleasepool {
-        // Not implemented - requires complete work generation pipeline
+        // Exercise setup_sieve directly. This deliberately avoids serialized
+        // work fixtures: the invariant below is sufficient to catch an
+        // incorrect modular inverse or layer transition in the GPU offsets.
+        const uint32_t primeCount = 1024;
+        const uint32_t width = 20;
+        const uint32_t limbs = 12;
+        std::vector<uint32_t> primes(primeCount);
+        std::vector<uint32_t> hash(limbs);
+        std::vector<uint32_t> modulos((size_t)primeCount * (limbs - 1));
+
+        for (uint32_t i = 0; i < primeCount; ++i)
+            primes[i] = gPrimes[14 + i];
+        for (uint32_t i = 0; i < limbs - 1; ++i)
+            hash[i] = 0x9e3779b9u * (i + 1) ^ (0xa5a5a5a5u >> (i & 7));
+        hash[limbs - 1] = 0;
+
+        for (uint32_t primeIdx = 0; primeIdx < primeCount; ++primeIdx) {
+            uint64_t power = 1;
+            const uint32_t prime = primes[primeIdx];
+            for (uint32_t limb = 0; limb < limbs - 1; ++limb) {
+                power = (power << 32) % prime;
+                modulos[(size_t)primeCount * limb + primeIdx] = (uint32_t)power;
+            }
+        }
+
+        const size_t offsetCount = (size_t)primeCount * width;
+        id<MTLBuffer> offset1 = [miner->_device newBufferWithLength:offsetCount * sizeof(uint32_t)
+                                                               options:MTLResourceStorageModeShared];
+        id<MTLBuffer> offset2 = [miner->_device newBufferWithLength:offsetCount * sizeof(uint32_t)
+                                                               options:MTLResourceStorageModeShared];
+        id<MTLBuffer> primeBuffer = [miner->_device newBufferWithBytes:primes.data()
+                                                                length:primes.size() * sizeof(uint32_t)
+                                                               options:MTLResourceStorageModeShared];
+        id<MTLBuffer> hashBuffer = [miner->_device newBufferWithBytes:hash.data()
+                                                               length:hash.size() * sizeof(uint32_t)
+                                                              options:MTLResourceStorageModeShared];
+        id<MTLBuffer> moduloBuffer = [miner->_device newBufferWithBytes:modulos.data()
+                                                                 length:modulos.size() * sizeof(uint32_t)
+                                                                options:MTLResourceStorageModeShared];
+        if (!offset1 || !offset2 || !primeBuffer || !hashBuffer || !moduloBuffer) {
+            LOG_F(ERROR, "Sieve offset correctness: buffer allocation failed");
+            gBenchmarkFailed = true;
+            return;
+        }
+
+        const uint32_t hashId = 0;
+        id<MTLCommandBuffer> command = [miner->_commandQueue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        [encoder setComputePipelineState:miner->_sieveSetupPipeline];
+        [encoder setBuffer:offset1 offset:0 atIndex:0];
+        [encoder setBuffer:offset2 offset:0 atIndex:1];
+        [encoder setBuffer:primeBuffer offset:0 atIndex:2];
+        [encoder setBuffer:hashBuffer offset:0 atIndex:3];
+        [encoder setBytes:&hashId length:sizeof(hashId) atIndex:4];
+        [encoder setBuffer:moduloBuffer offset:0 atIndex:5];
+        [encoder setBytes:&limbs length:sizeof(limbs) atIndex:6];
+        [encoder setBytes:&primeCount length:sizeof(primeCount) atIndex:7];
+        [encoder setBytes:&width length:sizeof(width) atIndex:8];
+        [encoder dispatchThreadgroups:MTLSizeMake(primeCount / miner->mLSize, 1, 1)
+                     threadsPerThreadgroup:MTLSizeMake(miner->mLSize, 1, 1)];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.status != MTLCommandBufferStatusCompleted) {
+            LOG_F(ERROR, "Sieve offset correctness command failed: %s",
+                  command.error ? [[command.error localizedDescription] UTF8String] : "unknown error");
+            gBenchmarkFailed = true;
+            return;
+        }
+
+        const uint32_t* gpuOffset1 = (const uint32_t*)offset1.contents;
+        const uint32_t* gpuOffset2 = (const uint32_t*)offset2.contents;
+        uint32_t failures = 0;
+        for (uint32_t primeIdx = 0; primeIdx < primeCount; ++primeIdx) {
+            const uint32_t prime = primes[primeIdx];
+            uint64_t fixedMod = 0;
+            for (int limb = (int)limbs - 2; limb >= 0; --limb)
+                fixedMod = ((fixedMod << 32) + hash[limb]) % prime;
+
+            uint32_t expected = gpuOffset1[primeIdx];
+            if (fixedMod == 0) {
+                for (uint32_t layer = 0; layer < width; ++layer) {
+                    const size_t idx = (size_t)primeCount * layer + primeIdx;
+                    if (gpuOffset1[idx] != 0 || gpuOffset2[idx] != 0)
+                        ++failures;
+                }
+                continue;
+            }
+
+            if ((fixedMod * expected) % prime != 1)
+                ++failures;
+            for (uint32_t layer = 0; layer < width; ++layer) {
+                const size_t idx = (size_t)primeCount * layer + primeIdx;
+                if (gpuOffset1[idx] != expected || gpuOffset2[idx] != prime - expected)
+                    ++failures;
+                expected = (expected & 1u) ? (expected + prime) / 2 : expected / 2;
+            }
+        }
+
+        if (failures == 0) {
+            LOG_F(INFO, "Sieve offset modular-inverse check: PASS (%u primes x %u layers)",
+                  primeCount, width);
+        } else {
+            LOG_F(ERROR, "Sieve offset modular-inverse check: FAILED (%u mismatches)", failures);
+            gBenchmarkFailed = true;
+        }
     }
 }
 
@@ -1746,7 +2007,9 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
             {8192, 32768, 210, true},
             {8192, 16384, 316, true},
             {8192, 32768, 316, true},
-            {8192, 65536, 316, true}
+            {8192, 65536, 316, true},
+            {12288, 32768, 210, true},
+            {12288, 65536, 210, true}
         };
         const uint32_t width = 20;
         const uint32_t lsize = 1024;
@@ -1777,21 +2040,28 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
                      scenario.primeCount == 16384 && scenario.dynamicMemory) ||
                     (scenario.size == 8192 && scenario.stripes == 316 &&
                      (scenario.primeCount == 16384 || scenario.primeCount == 32768) &&
+                     scenario.dynamicMemory) ||
+                    (scenario.size == 12288 && scenario.stripes == 210 &&
+                     (scenario.primeCount == 32768 || scenario.primeCount == 65536) &&
                      scenario.dynamicMemory);
                 if (!startupCandidate)
                     continue;
             }
             if (scenario.dynamicMemory &&
-                (NSUInteger)scenario.size * sizeof(uint32_t) >
+                (NSUInteger)metalSieveTileWords(scenario.size) * sizeof(uint32_t) >
                     miner->_device.maxThreadgroupMemoryLength) {
                 LOG_F(WARNING,
                       "Sieve autotune: skipping SIZE=%u; requires %u bytes threadgroup memory",
-                      scenario.size, scenario.size * (uint32_t)sizeof(uint32_t));
+                      scenario.size,
+                      metalSieveTileWords(scenario.size) * (uint32_t)sizeof(uint32_t));
                 continue;
             }
             @autoreleasepool {
                 const uint32_t stripes = scenario.stripes;
                 const uint32_t groups = (stripes / 2) * width;
+                const uint32_t tileCount = metalSieveTileCount(scenario.size);
+                const uint32_t tileWords = metalSieveTileWords(scenario.size);
+                const uint32_t dispatchGroups = groups * tileCount;
                 std::vector<PrimePair> primes(scenario.primeCount);
                 for (uint32_t i = 0; i < scenario.primeCount; ++i) {
                     uint32_t prime = gPrimes[13 + i];
@@ -1812,7 +2082,7 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
                     }
                 }
 
-                uint32_t windowSize = scenario.size * 32;
+                uint32_t windowSize = tileWords * 32;
                 uint32_t sieveRange1 = 0;
                 uint32_t sieveRange2 = 0;
                 uint32_t sieveRange3 = 0;
@@ -1864,7 +2134,7 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
                         miner->_sieveDynamicPipeline : miner->_sievePipeline;
                     [encoder setComputePipelineState:sievePipeline];
                     if (scenario.dynamicMemory) {
-                        [encoder setThreadgroupMemoryLength:(NSUInteger)scenario.size * sizeof(uint32_t)
+                        [encoder setThreadgroupMemoryLength:(NSUInteger)tileWords * sizeof(uint32_t)
                                                    atIndex:0];
                     }
                     [encoder setBuffer:outputBuffer offset:0 atIndex:0];
@@ -1877,12 +2147,12 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
                     [encoder setBytes:&sieveRange2 length:sizeof(sieveRange2) atIndex:7];
                     [encoder setBytes:&sieveRange3 length:sizeof(sieveRange3) atIndex:8];
                     [encoder setBytes:&scenario.primeCount length:sizeof(scenario.primeCount) atIndex:9];
-                    [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
+                    [encoder dispatchThreadgroups:MTLSizeMake(dispatchGroups, 1, 1)
                                  threadsPerThreadgroup:MTLSizeMake(lsize, 1, 1)];
 
                     [encoder setBuffer:outputBuffer2 offset:0 atIndex:0];
                     [encoder setBuffer:offsetBuffer2 offset:0 atIndex:1];
-                    [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
+                    [encoder dispatchThreadgroups:MTLSizeMake(dispatchGroups, 1, 1)
                                  threadsPerThreadgroup:MTLSizeMake(lsize, 1, 1)];
 
                     uint32_t hashid = 0;
@@ -2111,10 +2381,27 @@ void runMetalBenchmarks(id<MTLDevice> device, PrimeMiner* miner) {
     }
 }
 
-void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
+void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
+    MiningLoop(nullptr, gbp, submit, 0);
+}
+
+void PrimeMiner::MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds) {
+    MiningLoop(ctx, nullptr, nullptr, benchmarkSeconds);
+}
+
+void PrimeMiner::MiningLoop(GetWorkContext* ctx,
+                            GetBlockTemplateContext* gbp,
+                            SubmitContext* submit,
+                            unsigned benchmarkSeconds) {
     @autoreleasepool {
+        const bool benchmarkMode = benchmarkSeconds > 0;
+        const bool blockTemplateMode = gbp != nullptr;
         JsonWork currentWork;
-        bool hasChanged;
+        bool hasChanged = false;
+        unsigned dataId = 0;
+        blktemplate_t* workTemplate = nullptr;
+        block_t blockheader{};
+        sha256precalcData blockPrecalc{};
 
         memset(&mineCtx, 0, sizeof(MineContext));
         mineCtx.threadIdx = mID;
@@ -2199,8 +2486,18 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         uint64_t testCount = 0;
         uint64_t fermatCount = 0;
         uint64_t gpuPrefixMismatchCount = 0;
+        uint64_t benchmarkHashesDispatched = 0;
+        uint64_t benchmarkGpuMatches = 0;
+        uint64_t benchmarkMatchesRetained = 0;
+        uint64_t benchmarkValidHashes = 0;
+        uint64_t benchmarkSieveJobs = 0;
+        uint64_t benchmarkFinalCandidates = 0;
+        uint64_t benchmarkCpuCandidates = 0;
+        uint64_t benchmarkShares = 0;
+        uint64_t benchmarkHashStarvations = 0;
         unsigned numHashCoeff = 32768;  // Adaptive hash generation coefficient (matches HIP)
         const unsigned maxNumHashCoeff = 8 * 1024 * 1024;
+        std::chrono::steady_clock::time_point benchmarkStart;
 
         // Hash buffer and primorial array
         lifoBuffer<hash_t> hashes(PW);
@@ -2223,7 +2520,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             LOG_F(INFO, "GPU %d: sieve size = %s (%d bits)", mID, sievesize.get_str(10).c_str(), sievebits);
         }
 
-        LOG_F(INFO, "GPU %d: Starting JSON getwork mining loop", mID);
+        LOG_F(INFO, "GPU %d: Starting %s mining loop", mID,
+              blockTemplateMode ? "getblocktemplate" : "JSON getwork");
 
         // Initialize ALL candidate count buffers to 0 (both ridx and widx)
         // This matches HIP behavior at src/Hip/xpmclient_hip.cpp lines 631-635
@@ -2238,24 +2536,26 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
         }
         LOG_F(INFO, "GPU %d: Initialized all candidate count buffers to 0", mID);
 
-        // In test mode, load work from file once
-        if (gTestMode) {
-            LOG_F(INFO, "GPU %d: Test mode - loading work from file", mID);
-            if (!loadJsonWorkFromFile(gTestJsonFile, currentWork)) {
-                LOG_F(ERROR, "GPU %d: Failed to load test JSON work", mID);
-                return;
-            }
+        // End-to-end benchmark uses deterministic work but otherwise executes the
+        // same hash -> validation -> sieve -> Fermat -> CPU chain-check loop.
+        if (benchmarkMode) {
+            currentWork.parentHash =
+                "0x38929713c8e87a2ec3bfded09d579788617788b5abacbe42c80161d8c1ebe22f";
+            currentWork.height = 3058000;
+            currentWork.difficulty = 10ull << 24;
+            currentWork.merkle =
+                "0x96cc5fa7338faeff2371f7216b0d14b11197105730ea8df9dc75b17a730d4db4";
+            currentWork.nonce = 0;
             hasChanged = true;
-            nonce = gTestNonce;
+            nonce = 0;
             roundWorkId = 0;
             iteration = 0;
-
-            // WORKAROUND: Reset duplicate tracking for test work
             mHasLastSubmitted = false;
 
-            LOG_F(INFO, "GPU %d: Test work - height %llu, difficulty %llu",
-                  mID, (unsigned long long)currentWork.height,
-                  (unsigned long long)currentWork.difficulty);
+            LOG_F(INFO,
+                  "GPU %d: Starting %u-second end-to-end getwork benchmark "
+                  "(deterministic work, network and submission excluded)",
+                  mID, benchmarkSeconds);
 
             prepareJsonMidstate(currentWork, &midstateData);
 
@@ -2270,64 +2570,131 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                 mJsonRemainingPrefixBuf[i] = midstateData.remainingPrefix[i];
             }
             mJsonRemainingPrefixBuf.copyToDevice();
+            benchmarkStart = std::chrono::steady_clock::now();
         }
 
+        auto resetPipelineCounts = [&]() {
+            mJsonCountBuf[0] = 0;
+            mJsonCountBuf.copyToDevice();
+            mFermat320.bsize = 0;
+            mFermat352.bsize = 0;
+            for (int bufferIdx = 0; bufferIdx < 2; ++bufferIdx) {
+                mFermat320.buffer[bufferIdx].count[0] = 0;
+                mFermat320.buffer[bufferIdx].count.copyToDevice();
+                mFermat352.buffer[bufferIdx].count[0] = 0;
+                mFermat352.buffer[bufferIdx].count.copyToDevice();
+            }
+            final.count[0] = 0;
+            final.count.copyToDevice();
+            for (int sieveIdx = 0; sieveIdx < SW; ++sieveIdx) {
+                for (int bufferIdx = 0; bufferIdx < 2; ++bufferIdx) {
+                    for (int pipelineIdx = 0;
+                         pipelineIdx < FERMAT_PIPELINES; ++pipelineIdx) {
+                        mCandidatesCountBuffers[sieveIdx][bufferIdx][pipelineIdx] = 0;
+                    }
+                    mCandidatesCountBuffers[sieveIdx][bufferIdx].copyToDevice();
+                }
+            }
+        };
+
         while (!MakeExit) {
-            // Get work from server (skip in test mode)
-            if (!gTestMode) {
-                while (!ctx->get(mID, &currentWork, &hasChanged)) {
-                    usleep(100000);  // 100ms
-
-                    if (!ctx->isConnected()) {
-                        LOG_F(WARNING, "GPU %d: Disconnected, waiting...", mID);
-                        usleep(1000000);  // 1s
+            // Get work from server unless a deterministic benchmark is running.
+            if (!benchmarkMode) {
+                if (blockTemplateMode) {
+                    while (!(workTemplate =
+                                 gbp->get(0, workTemplate, &dataId, &hasChanged))) {
+                        usleep(100000);
                     }
-                }
 
-                if (hasChanged) {
-                    // Decode difficulty: chain_length + fractional (matches HIP lines 1400-1402)
-                    double decodedDifficulty = (currentWork.difficulty >> 24) +
-                                              ((currentWork.difficulty & 0xFFFFFF) / (double)(1 << 24));
-                    unsigned target = TargetGetLength(currentWork.difficulty);
+                    if (hasChanged) {
+                        blockheader.version = workTemplate->version;
+                        char blockHex[65];
+                        bytesToHex(workTemplate->prevblk, 32, blockHex);
+                        blockheader.hashPrevBlock.SetHex(blockHex);
+                        bytesToHex(workTemplate->_mrklroot, 32, blockHex);
+                        blockheader.hashMerkleRoot.SetHex(blockHex);
+                        blockheader.time = workTemplate->curtime;
+                        memcpy(&blockheader.bits, workTemplate->diffbits,
+                               sizeof(blockheader.bits));
+                        blockheader.nonce = 1;
+                        nonce = 1;
+                        iteration = 0;
+                        hashes.clear();
+                        mHasLastSubmitted = false;
+                        resetPipelineCounts();
 
-                    LOG_F(INFO, "GPU %d: New work - height %llu, difficulty %.5f, difficulty(raw) %llu, target length %u",
-                          mID, (unsigned long long)currentWork.height,
-                          decodedDifficulty, (unsigned long long)currentWork.difficulty, target);
+                        precalcSHA256(&blockheader, mJsonMidstateBuf._hostData,
+                                      &blockPrecalc);
+                        mJsonMidstateBuf.copyToDevice();
 
-                    // Reset for new work
-                    nonce = 0;
-                    roundWorkId = ctx->getWorkId();
-                    iteration = 0;
-                    hashes.clear();
-
-                    // WORKAROUND: Reset duplicate tracking on new work
-                    // This ensures we don't suppress legitimate finds on new work
-                    mHasLastSubmitted = false;
-                    prepareJsonMidstate(currentWork, &midstateData);
-
-                    // Copy midstate to GPU
-                    for (int i = 0; i < 8; i++) {
-                        mJsonMidstateBuf[i] = midstateData.midstate[i];
+                        const double decodedDifficulty =
+                            (blockheader.bits >> 24) +
+                            ((blockheader.bits & 0xFFFFFF) /
+                             (double)(1 << 24));
+                        LOG_F(INFO,
+                              "GPU %d: New block template - height %u, "
+                              "difficulty %.5f, target length %u, data id %u",
+                              mID, gbp->getBlockHeight(), decodedDifficulty,
+                              TargetGetLength(blockheader.bits), dataId);
                     }
-                    mJsonMidstateBuf.copyToDevice();
-
-                    // Copy remaining prefix to GPU
-                    for (unsigned i = 0; i < midstateData.remainingLen; i++) {
-                        mJsonRemainingPrefixBuf[i] = midstateData.remainingPrefix[i];
+                } else {
+                    while (!ctx->get(mID, &currentWork, &hasChanged)) {
+                        usleep(100000);
+                        if (!ctx->isConnected()) {
+                            LOG_F(WARNING, "GPU %d: Disconnected, waiting...", mID);
+                            usleep(1000000);
+                        }
                     }
-                    mJsonRemainingPrefixBuf.copyToDevice();
-                }
 
-                // Check for stale work
-                if (ctx->getWorkId() != roundWorkId) {
-                    LOG_F(WARNING, "GPU %d: Work changed during mining, restarting round", mID);
-                    continue;
+                    if (hasChanged) {
+                        const double decodedDifficulty =
+                            (currentWork.difficulty >> 24) +
+                            ((currentWork.difficulty & 0xFFFFFF) /
+                             (double)(1 << 24));
+                        LOG_F(INFO,
+                              "GPU %d: New work - height %llu, difficulty %.5f, "
+                              "difficulty(raw) %llu, target length %u",
+                              mID, (unsigned long long)currentWork.height,
+                              decodedDifficulty,
+                              (unsigned long long)currentWork.difficulty,
+                              TargetGetLength(currentWork.difficulty));
+
+                        nonce = 0;
+                        roundWorkId = ctx->getWorkId();
+                        iteration = 0;
+                        hashes.clear();
+                        mHasLastSubmitted = false;
+                        resetPipelineCounts();
+                        prepareJsonMidstate(currentWork, &midstateData);
+                        for (int i = 0; i < 8; i++) {
+                            mJsonMidstateBuf[i] = midstateData.midstate[i];
+                        }
+                        mJsonMidstateBuf.copyToDevice();
+                        for (unsigned i = 0; i < midstateData.remainingLen; i++) {
+                            mJsonRemainingPrefixBuf[i] =
+                                midstateData.remainingPrefix[i];
+                        }
+                        mJsonRemainingPrefixBuf.copyToDevice();
+                    }
+
+                    if (ctx->getWorkId() != roundWorkId) {
+                        LOG_F(WARNING,
+                              "GPU %d: Work changed during mining, restarting round",
+                              mID);
+                        continue;
+                    }
                 }
             }
 
+            // Match the production/HIP loop semantics: only the first
+            // iteration for a new work item is a reset.  In benchmark mode
+            // hasChanged remains true for the deterministic fixture, so using
+            // it directly would permanently disable adaptive hash batching.
+            const bool reset = benchmarkMode ? iteration == 0 : hasChanged;
+
             // Validate input: check if JSON prefix is too long
             // Maximum safe size: 150 bytes remaining + 20 nonce digits + 1 closing brace = 171
-            if (midstateData.remainingLen > 150) {
+            if (!blockTemplateMode && midstateData.remainingLen > 150) {
                 LOG_F(ERROR, "GPU %d: JSON prefix too long: %u bytes (max 150). Skipping work.",
                       mID, midstateData.remainingLen);
                 continue;
@@ -2336,24 +2703,40 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             // Adaptive hash generation - matches HIP
             int numhash = ((int)(16 * mSievePerRound) - (int)hashes.remaining()) * numHashCoeff;
             if (numhash < 0) numhash = 0;  // Safety check
-            const NSUInteger jsonThreadgroupSize =
-                std::min<NSUInteger>(256, [_jsonHashModPipeline maxTotalThreadsPerThreadgroup]);
+            id<MTLComputePipelineState> hashPipeline = blockTemplateMode ?
+                _blockHashModPipeline : _jsonHashModPipeline;
+            const NSUInteger hashThreadgroupSize =
+                std::min<NSUInteger>(256,
+                    [hashPipeline maxTotalThreadsPerThreadgroup]);
 
             // Only align if we have work to do
             if (numhash > 0) {
-                numhash = ((numhash + (int)jsonThreadgroupSize - 1) / (int)jsonThreadgroupSize) *
-                          (int)jsonThreadgroupSize;
+                numhash = ((numhash + (int)hashThreadgroupSize - 1) /
+                           (int)hashThreadgroupSize) * (int)hashThreadgroupSize;
             }
 
             // Only dispatch hash kernel if we need more hashes
             if (numhash > 0) {
+                if (benchmarkMode)
+                    benchmarkHashesDispatched += (uint64_t)numhash;
+
+                if (blockTemplateMode && nonce > (1u << 31)) {
+                    blockheader.time += mThreads;
+                    blockheader.nonce = 1;
+                    nonce = 1;
+                    precalcSHA256(&blockheader, mJsonMidstateBuf._hostData,
+                                  &blockPrecalc);
+                    mJsonMidstateBuf.copyToDevice();
+                }
+
                 // Reset counter
                 mJsonCountBuf[0] = 0;
-            mJsonCountBuf.copyToDevice();
+                mJsonCountBuf.copyToDevice();
 
-            // Create command buffer
-            id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-            commandBuffer.label = @"JSON Hash Modulus";
+                // Create command buffer
+                id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+                commandBuffer.label = blockTemplateMode ?
+                    @"Block Hash Modulus" : @"JSON Hash Modulus";
 
             // Add error handler
             [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
@@ -2365,28 +2748,47 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
             id<MTLComputeCommandEncoder> encoder =
                 [commandBuffer computeCommandEncoder];
-            encoder.label = @"JSON Hash Modulus Encoder";
+            encoder.label = blockTemplateMode ?
+                @"Block Hash Modulus Encoder" : @"JSON Hash Modulus Encoder";
 
-            // Encode jsonHashMod kernel
             if (gDebug) {
-                LOG_F(INFO, "GPU %d: Dispatching jsonHashMod kernel (numhash=%d, threadgroup=%lu)",
-                      mID, numhash, (unsigned long)jsonThreadgroupSize);
+                LOG_F(INFO,
+                      "GPU %d: Dispatching %s kernel (numhash=%d, threadgroup=%lu)",
+                      mID, blockTemplateMode ? "blockHashMod" : "jsonHashMod",
+                      numhash, (unsigned long)hashThreadgroupSize);
             }
-            [encoder setComputePipelineState:_jsonHashModPipeline];
-            [encoder setBytes:&nonce length:sizeof(uint64_t) atIndex:0];
+            [encoder setComputePipelineState:hashPipeline];
+            if (blockTemplateMode) {
+                const uint32_t blockNonce = (uint32_t)nonce;
+                [encoder setBytes:&blockNonce length:sizeof(blockNonce) atIndex:0];
+            } else {
+                [encoder setBytes:&nonce length:sizeof(nonce) atIndex:0];
+            }
             [encoder setBuffer:mJsonFoundBuf.buffer() offset:0 atIndex:1];
             [encoder setBuffer:mJsonCountBuf.buffer() offset:0 atIndex:2];
             [encoder setBuffer:mJsonPrimorialBuf.buffer() offset:0 atIndex:3];
             [encoder setBuffer:mJsonMidstateBuf.buffer() offset:0 atIndex:4];
-            [encoder setBuffer:mJsonRemainingPrefixBuf.buffer() offset:0 atIndex:5];
-            [encoder setBytes:&midstateData.remainingLen length:sizeof(uint32_t) atIndex:6];
-            [encoder setBytes:&midstateData.totalPrefixLen length:sizeof(uint32_t) atIndex:7];
+            if (blockTemplateMode) {
+                [encoder setBytes:&blockPrecalc.merkle
+                           length:sizeof(blockPrecalc.merkle) atIndex:5];
+                [encoder setBytes:&blockPrecalc.time
+                           length:sizeof(blockPrecalc.time) atIndex:6];
+                [encoder setBytes:&blockPrecalc.nbits
+                           length:sizeof(blockPrecalc.nbits) atIndex:7];
+            } else {
+                [encoder setBuffer:mJsonRemainingPrefixBuf.buffer()
+                            offset:0 atIndex:5];
+                [encoder setBytes:&midstateData.remainingLen
+                           length:sizeof(uint32_t) atIndex:6];
+                [encoder setBytes:&midstateData.totalPrefixLen
+                           length:sizeof(uint32_t) atIndex:7];
+            }
             [encoder setBytes:&mConfig.LIMIT13 length:sizeof(uint32_t) atIndex:8];
             [encoder setBytes:&mConfig.LIMIT14 length:sizeof(uint32_t) atIndex:9];
             [encoder setBytes:&mConfig.LIMIT15 length:sizeof(uint32_t) atIndex:10];
 
             MTLSize gridSize = MTLSizeMake(numhash, 1, 1);
-            MTLSize threadgroupSize = MTLSizeMake(jsonThreadgroupSize, 1, 1);
+            MTLSize threadgroupSize = MTLSizeMake(hashThreadgroupSize, 1, 1);
             [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
 
             [encoder endEncoding];
@@ -2418,6 +2820,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             // Process results
             mJsonCountBuf.copyToHost();
             unsigned foundCount = mJsonCountBuf[0];
+            if (benchmarkMode)
+                benchmarkGpuMatches += foundCount;
 
             if (gDebug) {
                 LOG_F(INFO, "GPU %d: jsonHashMod found %u candidates", mID, foundCount);
@@ -2433,6 +2837,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                 // Process found candidates - validate on CPU before sending to sieve
                 unsigned processCount = std::min(foundCount, 128u);
+                if (benchmarkMode)
+                    benchmarkMatchesRetained += processCount;
                 unsigned validCount = 0;
                 unsigned failedMinimum = 0;
                 unsigned failedDivisible = 0;
@@ -2449,38 +2855,51 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                             realPrimorial *= gPrimes[j];
                     }
 
-                    // Reconstruct full JSON with this nonce
-                    char jsonStr[512];
-                    int jsonLen = snprintf(jsonStr, sizeof(jsonStr),
-                        R"({"parent_hash": "%s", "height": %llu, "difficulty": %llu, "merkle": "%s", "nonce": %llu})",
-                        currentWork.parentHash.c_str(),
-                        (unsigned long long)currentWork.height,
-                        (unsigned long long)currentWork.difficulty,
-                        currentWork.merkle.c_str(),
-                        (unsigned long long)candidateNonce);
-
-                    // Compute SHA256(SHA256(json))
-                    SHA_256 sha1;
-                    sha1.init();
-                    sha1.update((const unsigned char*)jsonStr, jsonLen);
-                    unsigned char hash1[32];
-                    sha1.final(hash1);
-
-                    SHA_256 sha2;
-                    sha2.init();
-                    sha2.update(hash1, 32);
-                    unsigned char hash2[32];
-                    sha2.final(hash2);
-
-                    // Convert to uint256 in little-endian
-                    char hashHex[65];
-                    for (int j = 0; j < 32; j++) {
-                        snprintf(hashHex + j * 2, 3, "%02x", hash2[31 - j]);  // Reverse for little-endian
-                    }
-                    hashHex[64] = 0;
-
                     uint256 hash256;
-                    hash256.SetHex(hashHex);
+                    if (blockTemplateMode) {
+                        block_t candidateHeader = blockheader;
+                        candidateHeader.nonce = (uint32_t)candidateNonce;
+                        SHA_256 sha;
+                        sha.init();
+                        sha.update(
+                            (const unsigned char*)&candidateHeader,
+                            sizeof(candidateHeader));
+                        sha.final((unsigned char*)&hash256);
+                        sha.init();
+                        sha.update((const unsigned char*)&hash256,
+                                   sizeof(hash256));
+                        sha.final((unsigned char*)&hash256);
+                    } else {
+                        char jsonStr[512];
+                        int jsonLen = snprintf(
+                            jsonStr, sizeof(jsonStr),
+                            R"({"parent_hash": "%s", "height": %llu, "difficulty": %llu, "merkle": "%s", "nonce": %llu})",
+                            currentWork.parentHash.c_str(),
+                            (unsigned long long)currentWork.height,
+                            (unsigned long long)currentWork.difficulty,
+                            currentWork.merkle.c_str(),
+                            (unsigned long long)candidateNonce);
+
+                        SHA_256 sha1;
+                        sha1.init();
+                        sha1.update((const unsigned char*)jsonStr, jsonLen);
+                        unsigned char hash1[32];
+                        sha1.final(hash1);
+
+                        SHA_256 sha2;
+                        sha2.init();
+                        sha2.update(hash1, 32);
+                        unsigned char hash2[32];
+                        sha2.final(hash2);
+
+                        char hashHex[65];
+                        for (int j = 0; j < 32; j++) {
+                            snprintf(hashHex + j * 2, 3, "%02x",
+                                     hash2[31 - j]);
+                        }
+                        hashHex[64] = 0;
+                        hash256.SetHex(hashHex);
+                    }
 
                     // Validate hash meets minimum (>= 2^255)
                     if (hash256 < (uint256(1) << 255)) {
@@ -2506,7 +2925,7 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                     hash_t hash;
                     hash.iter = iteration;
                     hash.nonce = candidateNonce;
-                    hash.time = 0;  // Not used in getwork mode
+                    hash.time = blockTemplateMode ? blockheader.time : 0;
                     hash.hash = hash256;
                     hash.primorialIdx = adjustedIdx;
                     hash.primorial = mpzHashMultiplier;
@@ -2516,26 +2935,10 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                     memset(&hashBuf[hid * mConfig.N], 0, sizeof(uint32_t) * mConfig.N);
                     mpz_export(&hashBuf[hid * mConfig.N], 0, -1, 4, 0, 0, hashes.get(hid).shash.get_mpz_t());
                     validCount++;
-
-                    // CHECKPOINT 1: Dump first valid candidate for test mode
-                    if (gTestMode && validCount == 1) {
-                        LOG_F(INFO, "GPU %d: Test mode - dumping checkpoint 1 (JSON/Hash)", mID);
-
-                        // Dump JSON input
-                        dumpBuffer("01_json_input.bin", jsonStr, jsonLen);
-
-                        // Dump SHA256 hash (32 bytes)
-                        dumpBuffer("01_sha256_hash.bin", hash2, 32);
-
-                        // Dump shash (11 uint32s = 44 bytes)
-                        dumpBuffer("01_shash.bin", &hashBuf[hid * mConfig.N], 11 * sizeof(uint32_t));
-
-                        LOG_F(INFO, "GPU %d: Checkpoint 1 dumps complete", mID);
-                        LOG_F(INFO, "  JSON: %s", jsonStr);
-                        LOG_F(INFO, "  Nonce: %llu", (unsigned long long)candidateNonce);
-                        LOG_F(INFO, "  Hash (hex): %s", hashHex);
-                    }
                 }
+
+                if (benchmarkMode)
+                    benchmarkValidHashes += validCount;
 
                 // Log validation stats periodically (matches HIP at lines 1584-1596)
                 time_t currtime = time(0);
@@ -2578,7 +2981,9 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                 }
 
                 if (hashes.empty()) {
-                    if (!hasChanged) {  // Don't increase on new work (matches HIP's "if (!reset)")
+                    if (benchmarkMode)
+                        benchmarkHashStarvations++;
+                    if (!reset) {  // Don't increase the batch on new work.
                         numHashCoeff = std::min(numHashCoeff + 32768, maxNumHashCoeff);
                         LOG_F(WARNING, "GPU %d: Ran out of hashes, increasing sha256 work size coefficient to %u",
                               mID, numHashCoeff);
@@ -2587,6 +2992,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                 }
 
                 int hid = hashes.pop();
+                if (benchmarkMode)
+                    benchmarkSieveJobs++;
                 if (gDebug) {
                     LOG_F(INFO, "GPU %d: Processing hash %d (primorialIdx will be determined)", mID, hid);
                 }
@@ -2605,66 +3012,27 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                     LOG_F(INFO, "GPU %d: Creating command buffer for sieve kernels", mID);
                 }
 
-                // CHECKPOINT 2: In test mode, run setup_sieve separately and dump
-                if (gTestMode && i == 0 && iteration == 0) {
-                    LOG_F(INFO, "Checkpoint 2: Running setup_sieve separately for dump");
-
-                    id<MTLCommandBuffer> setupOnlyBuffer = [_commandQueue commandBuffer];
-                    id<MTLComputeCommandEncoder> setupEncoder = [setupOnlyBuffer computeCommandEncoder];
-
-                    [setupEncoder setComputePipelineState:_sieveSetupPipeline];
-                    [setupEncoder setBuffer:mSieveOff[0].buffer() offset:0 atIndex:0];
-                    [setupEncoder setBuffer:mSieveOff[1].buffer() offset:0 atIndex:1];
-                    [setupEncoder setBuffer:mPrimeBuf[primorialIdx].buffer() offset:0 atIndex:2];
-                    [setupEncoder setBuffer:hashBuf.buffer() offset:0 atIndex:3];
-                    [setupEncoder setBytes:&hid length:sizeof(uint32_t) atIndex:4];
-                    [setupEncoder setBuffer:mModulosBuf[primorialIdx].buffer() offset:0 atIndex:5];
-                    [setupEncoder setBytes:&mConfig.N length:sizeof(uint32_t) atIndex:6];
-                    [setupEncoder setBytes:&mConfig.PCOUNT length:sizeof(uint32_t) atIndex:7];
-                    [setupEncoder setBytes:&mConfig.WIDTH length:sizeof(uint32_t) atIndex:8];
-
-                    MTLSize setupGrid = MTLSizeMake(mConfig.PCOUNT / mLSize, 1, 1);
-                    MTLSize setupThreadgroup = MTLSizeMake(mLSize, 1, 1);
-                    [setupEncoder dispatchThreadgroups:setupGrid threadsPerThreadgroup:setupThreadgroup];
-                    [setupEncoder endEncoding];
-
-                    [setupOnlyBuffer commit];
-                    [setupOnlyBuffer waitUntilCompleted];
-
-                    // Copy buffers to host and dump
-                    mSieveOff[0].copyToHost();
-                    mSieveOff[1].copyToHost();
-
-                    LOG_F(INFO, "Checkpoint 2: Dumping setup_sieve outputs");
-                    dumpMetalBuffer("02_offset1.bin", mSieveOff[0].buffer(), mConfig.PCOUNT * mConfig.WIDTH * sizeof(uint32_t));
-                    dumpMetalBuffer("02_offset2.bin", mSieveOff[1].buffer(), mConfig.PCOUNT * mConfig.WIDTH * sizeof(uint32_t));
-                    dumpMetalBuffer("02_hash_buffer.bin", hashBuf.buffer(), mConfig.N * sizeof(uint32_t));
-                    LOG_F(INFO, "Checkpoint 2 complete");
-                }
-
                 // Create command buffer for sieve operations
                 id<MTLCommandBuffer> sieveCommandBuffer = [_commandQueue commandBuffer];
                 id<MTLComputeCommandEncoder> encoder = [sieveCommandBuffer computeCommandEncoder];
 
-                // 1. Setup sieve kernel (skip in test mode if already done for checkpoint)
+                // 1. Setup sieve kernel
                 @try {
-                    if (!(gTestMode && i == 0 && iteration == 0)) {
-                        [encoder setComputePipelineState:_sieveSetupPipeline];
-                        [encoder setBuffer:mSieveOff[0].buffer() offset:0 atIndex:0];
-                        [encoder setBuffer:mSieveOff[1].buffer() offset:0 atIndex:1];
-                        [encoder setBuffer:mPrimeBuf[primorialIdx].buffer() offset:0 atIndex:2];
-                        [encoder setBuffer:hashBuf.buffer() offset:0 atIndex:3];
-                        [encoder setBytes:&hid length:sizeof(uint32_t) atIndex:4];
-                        [encoder setBuffer:mModulosBuf[primorialIdx].buffer() offset:0 atIndex:5];
-                        [encoder setBytes:&mConfig.N length:sizeof(uint32_t) atIndex:6];
-                        [encoder setBytes:&mConfig.PCOUNT length:sizeof(uint32_t) atIndex:7];
-                        [encoder setBytes:&mConfig.WIDTH length:sizeof(uint32_t) atIndex:8];
+                    [encoder setComputePipelineState:_sieveSetupPipeline];
+                    [encoder setBuffer:mSieveOff[0].buffer() offset:0 atIndex:0];
+                    [encoder setBuffer:mSieveOff[1].buffer() offset:0 atIndex:1];
+                    [encoder setBuffer:mPrimeBuf[primorialIdx].buffer() offset:0 atIndex:2];
+                    [encoder setBuffer:hashBuf.buffer() offset:0 atIndex:3];
+                    [encoder setBytes:&hid length:sizeof(uint32_t) atIndex:4];
+                    [encoder setBuffer:mModulosBuf[primorialIdx].buffer() offset:0 atIndex:5];
+                    [encoder setBytes:&mConfig.N length:sizeof(uint32_t) atIndex:6];
+                    [encoder setBytes:&mConfig.PCOUNT length:sizeof(uint32_t) atIndex:7];
+                    [encoder setBytes:&mConfig.WIDTH length:sizeof(uint32_t) atIndex:8];
 
-                        // Need PCOUNT total threads (one per prime)
-                        MTLSize setupGrid = MTLSizeMake(mConfig.PCOUNT / mLSize, 1, 1);  // Number of threadgroups
-                        MTLSize setupThreadgroup = MTLSizeMake(mLSize, 1, 1);
-                        [encoder dispatchThreadgroups:setupGrid threadsPerThreadgroup:setupThreadgroup];
-                    }
+                    // Need PCOUNT total threads (one per prime)
+                    MTLSize setupGrid = MTLSizeMake(mConfig.PCOUNT / mLSize, 1, 1);  // Number of threadgroups
+                    MTLSize setupThreadgroup = MTLSizeMake(mLSize, 1, 1);
+                    [encoder dispatchThreadgroups:setupGrid threadsPerThreadgroup:setupThreadgroup];
 
                 // CRITICAL: Force setup_sieve completion before sieve kernels
                 // Without this, setup_sieve may not finish before sieve reads the offset buffers
@@ -2683,7 +3051,9 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                 // Calculate SIEVERANGE constants
                 // These determine different processing strategies for primes of different sizes
-                uint32_t windowSize = mConfig.SIZE * 32;  // Sieve window in bits
+                const uint32_t tileCount = metalSieveTileCount(mConfig.SIZE);
+                const uint32_t tileWords = metalSieveTileWords(mConfig.SIZE);
+                uint32_t windowSize = tileWords * 32;  // Local tile window in bits
                 uint32_t threadsNum = mLSize;  // LSIZE (now 512 instead of hardcoded 256)
                 uint32_t sieveRange1 = 0, sieveRange2 = 0, sieveRange3 = 0;
 
@@ -2750,10 +3120,11 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                     _sieveDynamicPipeline : _sievePipeline];
                 if (useDynamicSieve) {
                     [encoder setThreadgroupMemoryLength:
-                        (NSUInteger)mConfig.SIZE * sizeof(uint32_t) atIndex:0];
+                        (NSUInteger)tileWords * sizeof(uint32_t) atIndex:0];
                 }
 
-                MTLSize sieveGrid = MTLSizeMake((mConfig.STRIPES / 2) * mConfig.WIDTH, 1, 1);
+                MTLSize sieveGrid = MTLSizeMake(
+                    (mConfig.STRIPES / 2) * mConfig.WIDTH * tileCount, 1, 1);
                 MTLSize sieveThreadgroup = MTLSizeMake(mLSize, 1, 1);
 
                 // Pass A: Cunningham1 chain (CH1)
@@ -2831,28 +3202,6 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                               mSieveBuf[0][5], mSieveBuf[0][6], mSieveBuf[0][7], mSieveBuf[0][8], mSieveBuf[0][9]);
                     }
 
-                    // CHECKPOINT 3: Dump sieve outputs (once in test mode)
-                    if (gTestMode && i == 0 && iteration == 0) {
-                        mSieveBuf[0].copyToHost();
-                        mSieveBuf[1].copyToHost();
-
-                        LOG_F(INFO, "Checkpoint 3: Dumping sieve outputs");
-                        dumpMetalBuffer("03_sieve_buffer1.bin", mSieveBuf[0].buffer(), mConfig.SIZE * mConfig.STRIPES / 2 * mConfig.WIDTH * sizeof(uint32_t));
-                        dumpMetalBuffer("03_sieve_buffer2.bin", mSieveBuf[1].buffer(), mConfig.SIZE * mConfig.STRIPES / 2 * mConfig.WIDTH * sizeof(uint32_t));
-                        LOG_F(INFO, "Checkpoint 3 complete");
-
-                        // CHECKPOINT 4: Dump s_sieve outputs (candidates extracted from sieve)
-                        mSieveBuffers[i][0][widx].copyToHost();
-                        mSieveBuffers[i][1][widx].copyToHost();
-                        mCandidatesCountBuffers[i][widx].copyToHost();
-
-                        LOG_F(INFO, "Checkpoint 4: Dumping s_sieve outputs");
-                        dumpMetalBuffer("04_found320.bin", mSieveBuffers[i][0][widx].buffer(), MSO * sizeof(fermat_t));
-                        dumpMetalBuffer("04_found352.bin", mSieveBuffers[i][1][widx].buffer(), MSO * sizeof(fermat_t));
-                        dumpMetalBuffer("04_fcount.bin", mCandidatesCountBuffers[i][widx].buffer(), FERMAT_PIPELINES * sizeof(uint32_t));
-                        LOG_F(INFO, "Checkpoint 4 complete");
-                    }
-
                     // Don't wait - let it run asynchronously
                     // Debug: Check what types of candidates the sieve found
                     if (gDebug && i == 0 && hid == 0) {
@@ -2890,23 +3239,64 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
                             uint32_t type_counts[3] = {0, 0, 0};  // CH1, CH2, BiTwin
 
-                            // Count ALL 320-bit candidates
-                            for (uint32_t j = 0; j < count320; j++) {
-                                fermat_t* candidates = (fermat_t*)mSieveBuffers[i][0][widx]._hostData;
-                                if (candidates[j].type < 3) {
-                                    type_counts[candidates[j].type]++;
+                            // Counts can exceed the fixed sieve-output capacity
+                            // for an explicitly undersieved configuration.
+                            // Inspect only entries that the search kernel stored.
+                            fermat_t* candidates320 =
+                                (fermat_t*)mSieveBuffers[i][0][widx]._hostData;
+                            const uint32_t stored320 = std::min<uint32_t>(
+                                count320, (uint32_t)mSieveBuffers[i][0][widx]._size);
+                            for (uint32_t j = 0; j < stored320; j++) {
+                                if (candidates320[j].type < 3) {
+                                    type_counts[candidates320[j].type]++;
                                 }
                             }
-                            // Count ALL 352-bit candidates
-                            for (uint32_t j = 0; j < count352; j++) {
-                                fermat_t* candidates = (fermat_t*)mSieveBuffers[i][1][widx]._hostData;
-                                if (candidates[j].type < 3) {
-                                    type_counts[candidates[j].type]++;
+                            fermat_t* candidates352 =
+                                (fermat_t*)mSieveBuffers[i][1][widx]._hostData;
+                            const uint32_t stored352 = std::min<uint32_t>(
+                                count352, (uint32_t)mSieveBuffers[i][1][widx]._size);
+                            for (uint32_t j = 0; j < stored352; j++) {
+                                if (candidates352[j].type < 3) {
+                                    type_counts[candidates352[j].type]++;
                                 }
                             }
 
-                            LOG_F(INFO, "GPU %d: Sieve found %u+%u candidates. Type distribution (ALL): CH1=%u, CH2=%u, BiTwin=%u",
+                            uint32_t audited = 0;
+                            uint32_t divisible = 0;
+                            auto auditCandidates = [&](MetalBuffer<fermat_t>& buffer,
+                                                       uint32_t count) {
+                                fermat_t* candidates =
+                                    (fermat_t*)buffer._hostData;
+                                const uint32_t safeCount = std::min<uint32_t>(
+                                    count, (uint32_t)buffer._size);
+                                for (uint32_t j = 0;
+                                     j < safeCount && audited < 128; ++j) {
+                                    const fermat_t& candidateInfo = candidates[j];
+                                    mpz_class candidate = hashes.get(hid).shash;
+                                    candidate *= candidateInfo.index;
+                                    candidate <<= candidateInfo.origin;
+                                    candidate += candidateInfo.type == 1 ? 1 : -1;
+                                    for (uint32_t primeIdx = 0;
+                                         primeIdx < mConfig.PCOUNT; ++primeIdx) {
+                                        const uint32_t prime = gPrimes[
+                                            mPrimorial + primorialIdx + 1 + primeIdx];
+                                        if (mpz_divisible_ui_p(
+                                                candidate.get_mpz_t(), prime)) {
+                                            divisible++;
+                                            break;
+                                        }
+                                    }
+                                    audited++;
+                                }
+                            };
+                            auditCandidates(mSieveBuffers[i][0][widx], count320);
+                            auditCandidates(mSieveBuffers[i][1][widx], count352);
+
+                            LOG_F(INFO, "GPU %d: Sieve found %u+%u candidates. Type distribution (stored): CH1=%u, CH2=%u, BiTwin=%u",
                                   mID, count320, count352, type_counts[0], type_counts[1], type_counts[2]);
+                            LOG_F(INFO,
+                                  "GPU %d: CPU divisibility audit: %u/%u sieve candidates still divisible by a sieved prime",
+                                  mID, divisible, audited);
                         }
                     }
 
@@ -2929,6 +3319,8 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             int numcandis = final.count[0];
             numcandis = std::min(numcandis, (int)final.info._size);
             numcandis = std::max(numcandis, 0);
+            if (benchmarkMode)
+                benchmarkFinalCandidates += (uint64_t)numcandis;
 
             if (gDebug) {
                 LOG_F(INFO, "GPU %d: Fermat results from previous iteration: %d candidates passed (chainpos reached depth=%u)",
@@ -2953,7 +3345,9 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
 
             // CPU chain validation and submission
             CPrimalityTestParamsCuda testParams;
-            testParams.nBits = currentWork.difficulty;  // Set difficulty target (matches HIP line 1397)
+            const uint32_t targetBits = blockTemplateMode ?
+                blockheader.bits : (uint32_t)currentWork.difficulty;
+            testParams.nBits = targetBits;
 
             unsigned skippedOutOfBounds = 0;
             unsigned skippedTooOld = 0;
@@ -2990,19 +3384,16 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                 multi <<= candi.origin;  // CRITICAL: Left shift by origin (matches HIP line 1738)
                 origin *= multi;
 
-                // Adjust for chain type
-                if (candi.type == 0) {
-                    origin -= 1;  // Cunningham1
-                } else if (candi.type == 1) {
-                    origin += 1;  // Cunningham2
-                }
-
-                // Set candidate type for CPU validation (matches HIP line 1742)
+                // Keep the unadjusted chain origin here. The primality helper
+                // applies the Cunningham +/-1 offset according to this type,
+                // exactly as the HIP path does.
                 testParams.nCandidateType = candi.type + 1;
 
                 // Recheck the complete chain before submission. Starting at mDepth
                 // trusts the GPU-tested prefix and can submit a false positive if
                 // candidate metadata is stale or a GPU Fermat result is incorrect.
+                if (benchmarkMode)
+                    benchmarkCpuCandidates++;
                 bool isblock = ProbablePrimeChainTestFastCuda(origin, testParams, 0);
                 if (TargetGetLength(testParams.nChainLength) < mDepth) {
                     gpuPrefixMismatchCount++;
@@ -3017,6 +3408,57 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                     }
                 }
 
+                // Traditional Primecoin block submission permits removing
+                // redundant factors of two when doing so improves the chain.
+                // JSON getwork cannot normalize because its server validates
+                // the exact hash * multiplier origin that it supplied.
+                if (blockTemplateMode) {
+                    unsigned chainlength =
+                        TargetGetLength(testParams.nChainLength);
+                    while (multi % 2 == 0 && origin % 4 == 0) {
+                        mpz_class normalizedOrigin = origin / 2;
+                        CPrimalityTestParamsCuda normalizedParams = testParams;
+                        if (!ProbablePrimeChainTestFastCuda(
+                                normalizedOrigin, normalizedParams, 0)) {
+                            break;
+                        }
+
+                        const bool normalizedPrefixValid =
+                            (testParams.nCandidateType ==
+                                 PRIME_CHAIN_CUNNINGHAM1 &&
+                             FermatProbablePrimalityTestFastCuda(
+                                 normalizedOrigin - 1, chainlength,
+                                 normalizedParams, false)) ||
+                            (testParams.nCandidateType ==
+                                 PRIME_CHAIN_CUNNINGHAM2 &&
+                             FermatProbablePrimalityTestFastCuda(
+                                 normalizedOrigin + 1, chainlength,
+                                 normalizedParams, false)) ||
+                            (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN &&
+                             FermatProbablePrimalityTestFastCuda(
+                                 normalizedOrigin - 1, chainlength,
+                                 normalizedParams, false) &&
+                             FermatProbablePrimalityTestFastCuda(
+                                 normalizedOrigin + 1, chainlength,
+                                 normalizedParams, false));
+                        if (!normalizedPrefixValid) {
+                            break;
+                        }
+
+                        const unsigned normalizedLength =
+                            TargetGetLength(normalizedParams.nChainLength);
+                        if (normalizedLength <= chainlength) {
+                            break;
+                        }
+                        multi /= 2;
+                        origin = normalizedOrigin;
+                        chainlength = normalizedLength;
+                        testParams = normalizedParams;
+                    }
+                    isblock = ProbablePrimeChainTestFastCuda(
+                        origin, testParams, 0);
+                }
+
                 // Log detailed validation only in debug mode
                 if (gDebug && i < 10) {
                     double chainLength = testParams.nChainLength / 16777216.0;
@@ -3024,12 +3466,17 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                                            (candi.type == 1) ? "Cunningham2" :
                                            (candi.type == 2) ? "BiTwin" : "Unknown";
                     LOG_F(INFO, "GPU %d: Candidate %u: type=%s chainpos=%u chainLength=%.6f difficulty=%.6f",
-                          mID, i, typeName, candi.chainpos, chainLength, currentWork.difficulty / 16777216.0);
+                          mID, i, typeName, candi.chainpos, chainLength,
+                          targetBits / 16777216.0);
                 }
 
                 // Match HIP's submission logic exactly (line 1496)
                 // Use ONLY the testParams.nChainLength check, no redundant isblock check
-                if (testParams.nChainLength >= currentWork.difficulty) {
+                if (testParams.nChainLength >= targetBits) {
+                    if (benchmarkMode)
+                        benchmarkShares++;
+                    if (benchmarkMode)
+                        continue;
                     // ========================================================================
                     // WORKAROUND: Check for duplicate candidate BEFORE any output
                     // ========================================================================
@@ -3063,25 +3510,24 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                         // Print candidate origin for all chains that meet difficulty (matches HIP format at line 1497)
                         printf("\ncandis[%u] = %s\n", i, origin.get_str(10).c_str());
 
-                        // Normalization is NOT needed for JSON getwork
-                        // The server expects multiplier such that: SHA256(work) * multiplier = exact prime origin
-                        // Normalization changes the origin, causing server validation to fail
-
                         bool submitted = false;
 
-                        // Submit work via getwork protocol
-                        // Default: ONLY BiTwin chains (type 3)
-                        // Experimental: With --submit-all-chains flag, also submit Cunningham1 and Cunningham2
-                        bool shouldSubmit = (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) ||
-                                          (gSubmitAllChains && (testParams.nCandidateType == PRIME_CHAIN_CUNNINGHAM1 ||
-                                                               testParams.nCandidateType == PRIME_CHAIN_CUNNINGHAM2));
+                        // A node block template accepts every consensus chain
+                        // type.  The BiTwin-only default applies only to the
+                        // blocktree.get_work pool protocol.
+                        bool shouldSubmit = blockTemplateMode ||
+                            (testParams.nCandidateType == PRIME_CHAIN_BI_TWIN) ||
+                            (gSubmitAllChains &&
+                             (testParams.nCandidateType ==
+                                  PRIME_CHAIN_CUNNINGHAM1 ||
+                              testParams.nCandidateType ==
+                                  PRIME_CHAIN_CUNNINGHAM2));
 
-                        if (shouldSubmit) {
-                            // Check if work has changed before submitting (prevent stale submissions)
-                            if (ctx->getWorkId() != roundWorkId) {
+                        if (shouldSubmit && !benchmarkMode) {
+                            if (!blockTemplateMode &&
+                                ctx->getWorkId() != roundWorkId) {
                                 LOG_F(INFO, "GPU %d: Skipping stale submission (work changed)", mID);
                             } else {
-                                // Calculate target multiplier = primorial * multi (matches HIP line 1500)
                                 mpz_class targetMultiplier = hash.primorial * multi;
 
                                 mpz_class submittedHash;
@@ -3089,18 +3535,62 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
                                 if (submittedHash * targetMultiplier != origin) {
                                     LOG_F(ERROR,
                                           "GPU %d: Refusing inconsistent share submission "
-                                          "(height=%llu, nonce=%llu, hashid=%u)",
-                                          mID, (unsigned long long)currentWork.height,
+                                          "(height=%u, nonce=%llu, hashid=%u)",
+                                          mID, blockTemplateMode ?
+                                              gbp->getBlockHeight() :
+                                              (unsigned)currentWork.height,
                                           (unsigned long long)hash.nonce, candi.hashid);
                                     continue;
                                 }
 
-                                // Submit work
-                                submitted = ctx->submitWork(currentWork, hash.nonce, targetMultiplier);
+                                if (blockTemplateMode) {
+                                    PrimecoinBlockHeader work{};
+                                    work.version = blockheader.version;
+                                    memcpy(work.hashPrevBlock,
+                                           workTemplate->prevblk, 32);
+                                    memcpy(work.hashMerkleRoot,
+                                           workTemplate->_mrklroot, 32);
+                                    work.time = hash.time;
+                                    work.bits = blockheader.bits;
+                                    work.nonce = (uint32_t)hash.nonce;
 
-                                // If submitted, trigger refresh request (don't wait, continue mining)
-                                if (submitted) {
-                                    ctx->triggerRefresh();  // Request new work immediately
+                                    uint8_t mpi[260] = {};
+                                    BIGNUM* multiplier = nullptr;
+                                    if (BN_dec2bn(
+                                            &multiplier,
+                                            targetMultiplier.get_str().c_str()) == 0 ||
+                                        !multiplier) {
+                                        LOG_F(ERROR,
+                                              "GPU %d: Failed to encode block multiplier",
+                                              mID);
+                                        BN_free(multiplier);
+                                        continue;
+                                    }
+                                    const int mpiSize = BN_bn2mpi(multiplier, mpi);
+                                    BN_free(multiplier);
+                                    const int multiplierSize = mpiSize - 4;
+                                    if (multiplierSize <= 0 ||
+                                        multiplierSize > 255) {
+                                        LOG_F(ERROR,
+                                              "GPU %d: Invalid block multiplier size %d",
+                                              mID, multiplierSize);
+                                        continue;
+                                    }
+                                    work.multiplier[0] =
+                                        (uint8_t)multiplierSize;
+                                    std::reverse_copy(
+                                        mpi + 4, mpi + mpiSize,
+                                        work.multiplier + 1);
+                                    submit->submitBlock(
+                                        workTemplate, work, dataId);
+                                    submitted = true;
+                                } else {
+                                    submitted = ctx->submitWork(
+                                        currentWork, hash.nonce,
+                                        targetMultiplier);
+                                    if (submitted) {
+                                        ctx->triggerRefresh();
+                                    }
                                 }
                             }
                         }
@@ -3155,96 +3645,69 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx) {
             // Update statistics
             mineCtx.totalRoundsNum++;
 
-            // Exit after first iteration in test mode (checkpoints are dumped)
-            if (gTestMode && iteration >= 1) {
-                LOG_F(INFO, "GPU %d: Test mode complete, exiting after iteration %u", mID, iteration);
-                break;
+            if (benchmarkMode) {
+                const auto now = std::chrono::steady_clock::now();
+                const double elapsed =
+                    std::chrono::duration<double>(now - benchmarkStart).count();
+                if (elapsed >= benchmarkSeconds) {
+                    const double sieveRange =
+                        (double)mConfig.SIZE * 32.0 * mConfig.STRIPES;
+                    const double retainedPercent = benchmarkGpuMatches == 0 ? 100.0 :
+                        100.0 * (double)benchmarkMatchesRetained /
+                            (double)benchmarkGpuMatches;
+                    LOG_F(INFO, "");
+                    LOG_F(INFO, "=== End-to-end blocktree.get_work benchmark (Metal) ===");
+                    LOG_F(INFO,
+                          "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
+                          "LSIZE=%u, sieves/round=%u, Fermat batch=%u, "
+                          "hash coefficient=%u",
+                          mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT,
+                          mLSize, mSievePerRound, mBlockSize, numHashCoeff);
+                    LOG_F(INFO,
+                          "Wall time: %.3f s, loop iterations: %u, sieve jobs: %llu",
+                          elapsed, iteration,
+                          (unsigned long long)benchmarkSieveJobs);
+                    LOG_F(INFO,
+                          "JSON hashes dispatched: %.3f M/s (%llu total)",
+                          benchmarkHashesDispatched / elapsed / 1000000.0,
+                          (unsigned long long)benchmarkHashesDispatched);
+                    LOG_F(INFO,
+                          "GPU hash matches: %.1f/s; retained for CPU: %.1f/s "
+                          "(%.4f%% retained)",
+                          benchmarkGpuMatches / elapsed,
+                          benchmarkMatchesRetained / elapsed,
+                          retainedPercent);
+                    LOG_F(INFO,
+                          "CPU-validated hashes feeding sieve: %.1f/s",
+                          benchmarkValidHashes / elapsed);
+                    LOG_F(INFO,
+                          "Effective end-to-end sieve scan: %.3f G/s",
+                          sieveRange * benchmarkSieveJobs / elapsed / 1000000000.0);
+                    LOG_F(INFO,
+                          "Sieve candidates feeding Fermat: %.1f/s (%llu total)",
+                          testCount / elapsed,
+                          (unsigned long long)testCount);
+                    LOG_F(INFO,
+                          "Final GPU candidates: %.1f/s; CPU chain checks: %.1f/s; "
+                          "shares meeting target: %llu",
+                          benchmarkFinalCandidates / elapsed,
+                          benchmarkCpuCandidates / elapsed,
+                          (unsigned long long)benchmarkShares);
+                    LOG_F(INFO,
+                          "Hash-starved loop iterations: %llu; GPU-prefix mismatches: %llu",
+                          (unsigned long long)benchmarkHashStarvations,
+                          (unsigned long long)gpuPrefixMismatchCount);
+                    LOG_F(INFO, "================================================");
+                    break;
+                }
             }
         }
 
+        if (workTemplate) {
+            blktmpl_free(workTemplate);
+        }
         LOG_F(INFO, "GPU %d: Mining loop exited", mID);
     }
-}
-
-//=============================================================================
-// Test Mode Helper Functions
-//=============================================================================
-
-// Load JsonWork from a JSON file for test mode
-bool loadJsonWorkFromFile(const char* filename, JsonWork& work) {
-    FILE* f = fopen(filename, "r");
-    if (!f) {
-        fprintf(stderr, "Error: Cannot open test JSON file: %s\n", filename);
-        return false;
-    }
-
-    // Read entire file
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    std::string content(size, '\0');
-    if (fread(&content[0], 1, size, f) != (size_t)size) {
-        fprintf(stderr, "Error: Failed to read test JSON file\n");
-        fclose(f);
-        return false;
-    }
-    fclose(f);
-
-    // Parse JSON (simple manual parsing for the specific format)
-    auto findValue = [&](const char* key) -> std::string {
-        std::string searchKey = std::string("\"") + key + "\":";
-        size_t pos = content.find(searchKey);
-        if (pos == std::string::npos) return "";
-
-        pos += searchKey.length();
-        // Skip whitespace
-        while (pos < content.length() && isspace(content[pos])) pos++;
-
-        // Check if value is a string (quoted) or number
-        if (content[pos] == '"') {
-            pos++;  // Skip opening quote
-            size_t end = content.find('"', pos);
-            if (end == std::string::npos) return "";
-            return content.substr(pos, end - pos);
-        } else {
-            // Number
-            size_t end = pos;
-            while (end < content.length() && (isdigit(content[end]) || content[end] == '.')) end++;
-            return content.substr(pos, end - pos);
-        }
-    };
-
-    work.parentHash = findValue("parent_hash");
-    std::string heightStr = findValue("height");
-    std::string difficultyStr = findValue("difficulty");
-    work.merkle = findValue("merkle");
-
-    if (work.parentHash.empty() || heightStr.empty() || difficultyStr.empty() || work.merkle.empty()) {
-        fprintf(stderr, "Error: Invalid JSON format in test file\n");
-        return false;
-    }
-
-    work.height = strtoull(heightStr.c_str(), nullptr, 10);
-    work.difficulty = strtoull(difficultyStr.c_str(), nullptr, 10);
-    work.nonce = 0;
-
-    return true;
-}
-
-// Create test dump directory structure
-bool createTestDumpDir(int roundNum) {
-    if (!gTestDumpDir) return false;
-
-    // Create main directory
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s/round_%d\"", gTestDumpDir, roundNum);
-    if (system(cmd) != 0) {
-        fprintf(stderr, "Error: Failed to create dump directory\n");
-        return false;
-    }
-
-    return true;
 }
 
 //=============================================================================
@@ -3254,10 +3717,17 @@ bool createTestDumpDir(int roundNum) {
 int main(int argc, char** argv) {
     // Parse command-line arguments
     bool runBenchmark = false;
+    unsigned miningBenchmarkSeconds = 0;
     enum {
         OPT_METAL_SIEVE_WORDS = 1000,
         OPT_METAL_STRIPES,
-        OPT_NO_METAL_AUTOTUNE
+        OPT_NO_METAL_AUTOTUNE,
+        OPT_MINING_BENCHMARK,
+        OPT_PROTOCOL,
+        OPT_RPC_USER,
+        OPT_RPC_PASSWORD,
+        OPT_WALLET,
+        OPT_WORKER_ID
     };
     static struct option longOptions[] = {
         {"url", required_argument, 0, 'u'},
@@ -3271,9 +3741,14 @@ int main(int argc, char** argv) {
         {"metal-stripes", required_argument, 0, OPT_METAL_STRIPES},
         {"no-metal-autotune", no_argument, 0, OPT_NO_METAL_AUTOTUNE},
         {"benchmark", no_argument, 0, 'b'},
-        {"test-dump", required_argument, 0, 'D'},
-        {"test-json", required_argument, 0, 'J'},
-        {"test-nonce", required_argument, 0, 'N'},
+        {"mining-benchmark", required_argument, 0, OPT_MINING_BENCHMARK},
+        {"protocol", required_argument, 0, OPT_PROTOCOL},
+        {"rpc-user", required_argument, 0, OPT_RPC_USER},
+        {"user", required_argument, 0, OPT_RPC_USER},
+        {"rpc-password", required_argument, 0, OPT_RPC_PASSWORD},
+        {"pass", required_argument, 0, OPT_RPC_PASSWORD},
+        {"wallet", required_argument, 0, OPT_WALLET},
+        {"worker-id", required_argument, 0, OPT_WORKER_ID},
         {"submit-all-chains", no_argument, 0, 'A'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -3301,22 +3776,27 @@ int main(int argc, char** argv) {
                 gMetalConfigExplicit = true;
                 break;
             case OPT_NO_METAL_AUTOTUNE: gMetalAutoTune = false; break;
+            case OPT_MINING_BENCHMARK:
+                miningBenchmarkSeconds = (unsigned)strtoul(optarg, nullptr, 10);
+                break;
+            case OPT_PROTOCOL: gProtocol = optarg; break;
+            case OPT_RPC_USER: gRpcUser = optarg; break;
+            case OPT_RPC_PASSWORD: gRpcPassword = optarg; break;
+            case OPT_WALLET: gWallet = optarg; break;
+            case OPT_WORKER_ID:
+                gWorkerId = (unsigned)strtoul(optarg, nullptr, 10);
+                break;
             case 'b': runBenchmark = true; break;
             case 'A': gSubmitAllChains = true; break;
-            case 'D':
-                gTestDumpDir = optarg;
-                gTestMode = true;
-                break;
-            case 'J':
-                gTestJsonFile = optarg;
-                break;
-            case 'N':
-                gTestNonce = strtoull(optarg, nullptr, 10);
-                break;
             case 'h':
                 printf("XPMiner Metal - Primecoin miner for Apple Silicon\n\n");
                 printf("Usage: xpmmetal [options]\n");
-                printf("  -u, --url <url>             WebSocket URL (required for mining)\n");
+                printf("  -u, --url <url>             WebSocket URL for getwork, or node RPC URL\n");
+                printf("      --protocol <name>       getwork (default) or getblocktemplate\n");
+                printf("      --wallet <address>      Payout address required by getblocktemplate\n");
+                printf("      --rpc-user <name>       Node RPC user\n");
+                printf("      --rpc-password <pass>   Node RPC password\n");
+                printf("      --worker-id <n>         Extra-nonce worker ID (default: 0)\n");
                 printf("  -d, --debug                 Enable debug output\n");
                 printf("  -p, --primorial <n>         Primorial index (default: 19)\n");
                 printf("  -s, --sieve-size <n>        Sieve size (default: 10)\n");
@@ -3324,15 +3804,13 @@ int main(int argc, char** argv) {
                 printf("  -e, --extensions-num <n>    Extensions number (default: 9)\n");
                 printf("  -P, --prime-count <n>       Prime count; disables startup autotuning\n");
                 printf("                              Try: 8192, 16384, 32768, or 65536\n");
-                printf("      --metal-sieve-words <n> Metal sieve words: 4096 or 8192; disables autotuning\n");
+                printf("      --metal-sieve-words <n> Metal sieve words: 4096, 8192, or tiled 12288; disables autotuning\n");
                 printf("      --metal-stripes <n>     Even stripe count; disables autotuning\n");
                 printf("      --no-metal-autotune     Use safe defaults: 4096/210/16384\n");
-                printf("  -b, --benchmark             Run performance benchmarks to measure GPU speed\n");
+                printf("  -b, --benchmark             Run isolated kernel diagnostics\n");
+                printf("      --mining-benchmark <s>  Run the real getwork mining pipeline for <s> seconds\n");
                 printf("  -A, --submit-all-chains     [EXPERIMENTAL] Submit all chain types (Cunningham1,\n");
                 printf("                              Cunningham2, BiTwin) instead of only BiTwin chains\n");
-                printf("      --test-dump <dir>       Enable test mode, dump checkpoints to <dir>\n");
-                printf("      --test-json <file>      Load test JSON work from <file>\n");
-                printf("      --test-nonce <n>        Starting nonce for test mode (default: 0)\n");
                 printf("  -h, --help                  Show this help\n");
                 return 0;
             default:
@@ -3341,8 +3819,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (gMetalSieveWords != 4096 && gMetalSieveWords != 8192) {
-        fprintf(stderr, "Error: --metal-sieve-words must be 4096 or 8192\n");
+    if (gMetalSieveWords != 4096 && gMetalSieveWords != 8192 &&
+        gMetalSieveWords != 12288) {
+        fprintf(stderr,
+                "Error: --metal-sieve-words must be 4096, 8192, or 12288\n");
         return 1;
     }
     if (gMetalStripes <= 0 || gMetalStripes > 630 || (gMetalStripes & 1) != 0) {
@@ -3354,19 +3834,32 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Test mode validation
-    if (gTestMode) {
-        if (!gTestJsonFile) {
-            fprintf(stderr, "Error: --test-json required when using --test-dump\n");
+    if (runBenchmark && miningBenchmarkSeconds > 0) {
+        fprintf(stderr, "Error: choose either --benchmark or --mining-benchmark\n");
+        return 1;
+    }
+    const bool useGetBlockTemplate =
+        strcmp(gProtocol, "getblocktemplate") == 0;
+    const bool useGetWork = strcmp(gProtocol, "getwork") == 0;
+    if (!useGetWork && !useGetBlockTemplate) {
+        fprintf(stderr,
+                "Error: --protocol must be 'getwork' or 'getblocktemplate'\n");
+        return 1;
+    }
+    if (useGetBlockTemplate && gWsUrl) {
+        gRpcUrl = gWsUrl;
+    }
+    if (!runBenchmark && miningBenchmarkSeconds == 0) {
+        if (useGetWork && !gWsUrl) {
+            fprintf(stderr, "Error: WebSocket URL required for getwork mining\n");
+            fprintf(stderr, "Usage: xpmmetal --url ws://host:port/path\n");
             return 1;
         }
-        // In test mode, URL is optional (we read from file)
-    } else if (!runBenchmark && !gWsUrl) {
-        fprintf(stderr, "Error: WebSocket URL required for mining\n");
-        fprintf(stderr, "Usage: xpmmetal --url ws://host:port/path\n");
-        fprintf(stderr, "   or: xpmmetal --benchmark (to run tests)\n");
-        fprintf(stderr, "   or: xpmmetal --test-dump <dir> --test-json <file> (for debugging)\n");
-        return 1;
+        if (useGetBlockTemplate && !gWallet) {
+            fprintf(stderr,
+                    "Error: --wallet is required for getblocktemplate mining\n");
+            return 1;
+        }
     }
 
     @autoreleasepool {
@@ -3376,6 +3869,7 @@ int main(int argc, char** argv) {
         if (gDebug) {
             loguru::g_stderr_verbosity = loguru::Verbosity_INFO;  // Show all LOG_F(INFO, ...) debug messages
         }
+        blkmk_sha256_impl = sha256;
 
         // Get Metal device
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
@@ -3405,26 +3899,13 @@ int main(int argc, char** argv) {
         LOG_F(INFO, "Prime tables generated");
 
         // Log experimental feature status
-        if (gSubmitAllChains) {
+        if (useGetBlockTemplate) {
+            LOG_F(INFO,
+                  "Submit mode: all consensus chain types (getblocktemplate)");
+        } else if (gSubmitAllChains) {
             LOG_F(WARNING, "[EXPERIMENTAL] Submit all chains enabled: BiTwin, Cunningham1, Cunningham2 will be submitted");
         } else {
             LOG_F(INFO, "Submit mode: BiTwin chains only (use --submit-all-chains for experimental mode)");
-        }
-
-        // If test mode, set up dump directory and load test work
-        if (gTestMode) {
-            LOG_F(INFO, "Test mode enabled");
-            LOG_F(INFO, "  Dump directory: %s", gTestDumpDir);
-            LOG_F(INFO, "  JSON file: %s", gTestJsonFile);
-            LOG_F(INFO, "  Starting nonce: %llu", (unsigned long long)gTestNonce);
-
-            // Create dump directory
-            if (!createTestDumpDir(0)) {
-                LOG_F(ERROR, "Failed to create dump directory");
-                return 1;
-            }
-
-            LOG_F(INFO, "Test dump directory created: %s/round_0", gTestDumpDir);
         }
 
         // If benchmark mode, run benchmarks and exit
@@ -3450,15 +3931,26 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        // Create getwork context (or use test work in test mode)
+        // Network contexts are omitted for the deterministic end-to-end
+        // benchmark, which always exercises the getwork pipeline locally.
         GetWorkContext* getworkCtx = nullptr;
+        GetBlockTemplateContext* getblockCtx = nullptr;
+        SubmitContext* submitCtx = nullptr;
 
-        if (!gTestMode) {
-            LOG_F(INFO, "Connecting to %s", gWsUrl);
-            getworkCtx = new GetWorkContext(nullptr, gWsUrl);
-            getworkCtx->run();
-        } else {
-            LOG_F(INFO, "Test mode: Will use test JSON work from %s", gTestJsonFile);
+        if (miningBenchmarkSeconds == 0) {
+            if (useGetBlockTemplate) {
+                LOG_F(INFO, "Connecting to Primecoin RPC at %s", gRpcUrl);
+                getblockCtx = new GetBlockTemplateContext(
+                    nullptr, gRpcUrl, gRpcUser, gRpcPassword, gWallet,
+                    4, gThreadsNum, gWorkerId);
+                getblockCtx->run();
+                submitCtx = new SubmitContext(
+                    nullptr, gRpcUrl, gRpcUser, gRpcPassword);
+            } else {
+                LOG_F(INFO, "Connecting to %s", gWsUrl);
+                getworkCtx = new GetWorkContext(nullptr, gWsUrl);
+                getworkCtx->run();
+            }
         }
 
         // Create miner
@@ -3470,7 +3962,7 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        const bool shouldAutoTune = gMetalAutoTune && !gMetalConfigExplicit && !gTestMode;
+        const bool shouldAutoTune = gMetalAutoTune && !gMetalConfigExplicit;
         if (shouldAutoTune) {
             LOG_F(INFO, "Running safe Metal sieve startup autotune...");
             if (!metalSieveEvaluate(&miner, true)) {
@@ -3497,8 +3989,13 @@ int main(int argc, char** argv) {
         }
 
         // Start mining
-        LOG_F(INFO, "Starting mining...");
-        miner.MiningGetWork(getworkCtx);
+        LOG_F(INFO, "Starting %s mining...",
+              miningBenchmarkSeconds > 0 ? "benchmark" : gProtocol);
+        if (useGetBlockTemplate && miningBenchmarkSeconds == 0) {
+            miner.Mining(getblockCtx, submitCtx);
+        } else {
+            miner.MiningGetWork(getworkCtx, miningBenchmarkSeconds);
+        }
     }
 
     return 0;

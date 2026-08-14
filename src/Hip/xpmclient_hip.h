@@ -198,7 +198,7 @@ class PrimeMiner {
 
     bool MakeExit;
     void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
-    void MiningGetWork(GetWorkContext* ctx);
+    void MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds = 0);
 
    private:
     void FermatInit(pipeline_t& fermat, unsigned mfs);

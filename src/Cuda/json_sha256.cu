@@ -1,9 +1,10 @@
-#include "hip/hip_runtime.h"
+// JSON SHA256 kernel for CUDA getwork protocol
+// Ported from HIP implementation
 
 // HashPrimorial constant - number of primes to test divisibility for
 #define HashPrimorial 16
 
-// NOTE: SHA256 K constants are already defined in sha256_hip.cpp as 'k[]'
+// NOTE: SHA256 K constants are already defined in sha256.cu as 'k[]'
 // and shared across all kernels
 
 // SHA256 helper macros
@@ -31,7 +32,7 @@ __device__ inline void store_u32_be(uint8_t* out, uint32_t value) {
 }
 
 // NOTE: Primorial divisibility testing constants and functions
-// are already defined in sha256_hip.cpp and shared across all kernels.
+// are already defined in sha256.cu and shared across all kernels.
 // We reuse: indexesOne, divisors24one, indexes, divisors24,
 // modulos24one, modulos24, multipliers32one, multipliers32,
 // offsets32one, offsets32, gPrimes, sum24(), check24(), divisionCheck24()
@@ -128,8 +129,8 @@ __device__ void sha256_from_midstate(uint32_t* hash_out, uint32_t* midstate,
   // Pad with zeros
   while (idx < 56) block[idx++] = 0;
 
-  // Append the length of both the prefix represented by the midstate and all
-  // bytes supplied here.  `len` may have been reduced by the block loop.
+  // Include both the prefix represented by the midstate and all bytes passed
+  // here. `len` may already have been reduced by the complete-block loop.
   uint64_t bitlen = (processedLen + originalLen) * 8;
   for (int i = 7; i >= 0; i--) {
     block[56 + i] = bitlen & 0xff;
@@ -189,7 +190,7 @@ __device__ void sha256_full(uint32_t* hash_out, const uint8_t* data, uint32_t le
   }
 }
 
-// Main kernel for JSON-based hash modulus (placeholder - needs primorial testing)
+// Main kernel for JSON-based hash modulus
 extern "C" __global__ void jsonHashMod(
     uint64_t nonceOffset,
     uint32_t *found,
@@ -236,9 +237,8 @@ extern "C" __global__ void jsonHashMod(
   uint32_t hash2[8];
   sha256_full(hash2, hash1Bytes, 32);
 
-  // Convert each SHA word to the little-endian uint256 limb layout used by
-  // the established block-header hash kernel.  Limb order is unchanged;
-  // reversing both words and bytes would reverse the conversion twice.
+  // Convert SHA words to the little-endian uint256 limb layout used by the
+  // established block-header hash kernel. The word order stays unchanged.
   uint32_t state[9];  // Note: 9 elements for state (8 hash words + padding word)
   for (int i = 0; i < 8; i++) {
     state[i] = bswap32(hash2[i]);
@@ -273,9 +273,8 @@ extern "C" __global__ void jsonHashMod(
       lastBit = isDivisor ? i+5 : lastBit;
     }
 
-    // Calculate the multiplier products.  The bit field marks primes that
-    // already divide the hash, so those primes must be omitted from the
-    // multiplier (matching bhashmodUsePrecalc in sha256_hip.cpp).
+    // Bits mark primes that already divide the hash, so the multiplier must
+    // contain the complementary primes (matching bhashmodUsePrecalc).
     uint32_t prod13l = 1;
     for (unsigned i = 0; i < 8; i++)
       prod13l = (prod13l * (primorialBitField & (1u << i) ? 1u : gPrimes[i]));

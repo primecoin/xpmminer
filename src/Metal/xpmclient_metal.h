@@ -10,9 +10,11 @@
 
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
+#include <cstddef>
 #include <gmp.h>
 #include <gmpxx.h>
 #include "getwork_client.h"
+#include "getblocktemplate.h"
 #include "metalutil.h"
 #include "uint256.h"
 #include "sha256.h"
@@ -61,6 +63,9 @@ struct config_t {
     uint32_t LIMIT15;    // 15-prime primorial limit
 };
 
+static_assert(sizeof(config_t) == 9 * sizeof(uint32_t),
+              "config_t must remain nine packed 32-bit values");
+
 // Fermat test candidate structure
 // Must match Metal shader struct in common.metal
 struct fermat_t {
@@ -71,6 +76,15 @@ struct fermat_t {
     uint8_t type;        // Chain type (0=Cunningham1, 1=Cunningham2, 2=BiTwin)
     uint8_t reserved;    // Padding
 };
+
+static_assert(sizeof(fermat_t) == 12,
+              "fermat_t must match the Metal shader's 12-byte layout");
+static_assert(offsetof(fermat_t, index) == 0 &&
+              offsetof(fermat_t, hashid) == 4 &&
+              offsetof(fermat_t, origin) == 8 &&
+              offsetof(fermat_t, chainpos) == 9 &&
+              offsetof(fermat_t, type) == 10,
+              "fermat_t host/shader offsets changed");
 
 // Metal device information
 struct MetalDeviceInfo {
@@ -192,7 +206,8 @@ public:
     config_t getConfig() { return mConfig; }
 
     bool MakeExit;
-    void MiningGetWork(GetWorkContext* ctx);
+    void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
+    void MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds = 0);
 
     // Allow benchmark functions to access private members
     friend void runMetalBenchmarks(id<MTLDevice> device, PrimeMiner* miner);
@@ -202,6 +217,10 @@ public:
     friend void metalHashmodBenchmark(PrimeMiner* miner);
 
 private:
+    void MiningLoop(GetWorkContext* ctx,
+                    GetBlockTemplateContext* gbp,
+                    SubmitContext* submit,
+                    unsigned benchmarkSeconds);
     void FermatInit(pipeline_t& fermat, unsigned mfs);
     void FermatDispatch(pipeline_t& fermat,
                         MetalBuffer<fermat_t> sieveBuffers[SW][FERMAT_PIPELINES][2],
@@ -231,6 +250,8 @@ private:
     // Compute pipeline states
     id<MTLComputePipelineState> _testKernelPipeline;    // Minimal test kernel
     id<MTLComputePipelineState> _jsonHashModPipeline;
+    id<MTLComputePipelineState> _blockHashModPipeline;
+    id<MTLComputePipelineState> _blockHashDebugPipeline;
     id<MTLComputePipelineState> _sieveSetupPipeline;
     id<MTLComputePipelineState> _sievePipeline;
     id<MTLComputePipelineState> _sieveDynamicPipeline;

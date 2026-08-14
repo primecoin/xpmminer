@@ -139,10 +139,18 @@ else()
   endif()
 endif()
 
-# Post-build: Auto-copy kernel files to build directory
-# This makes the binary work immediately after 'make' without manual file copying
-# Uses file(GLOB) to automatically find all .cu files (no hardcoded paths)
-file(GLOB CUDA_KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cu")
+# Post-build: copy every NVRTC source used by xpmclient.cpp. Keep this list
+# explicit so a required new kernel (notably json_sha256.cu) cannot be omitted
+# from an already-configured build merely because a glob did not trigger CMake.
+set(CUDA_KERNEL_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/helpers.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/procs.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/fermat.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/sieve.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/sha256.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/json_sha256.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks.cu
+)
 add_custom_command(TARGET xpmcuda POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/xpm/cuda
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
