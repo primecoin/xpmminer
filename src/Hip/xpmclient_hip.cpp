@@ -2839,14 +2839,28 @@ void initCmdLineOptions(option* options) {
 }
 
 int main(int argc, char** argv) {
-    char logFileName[64];
+    constexpr const char* logDirectory = "logs";
+    struct stat logDirectoryInfo{};
+    bool fileLoggingEnabled = true;
+    if (mkdir(logDirectory, 0755) != 0 &&
+        !(errno == EEXIST && stat(logDirectory, &logDirectoryInfo) == 0 &&
+          S_ISDIR(logDirectoryInfo.st_mode))) {
+        fprintf(
+            stderr,
+            "Warning: could not create log directory '%s': %s; file logging disabled\n",
+            logDirectory,
+            std::strerror(errno));
+        fileLoggingEnabled = false;
+    }
+
+    char logFileName[80];
     {
         auto t = std::time(nullptr);
         auto now = std::localtime(&t);
         snprintf(
             logFileName,
             sizeof(logFileName),
-            "miner-%04u-%02u-%02u.log",
+            "logs/miner-%04u-%02u-%02u.log",
             now->tm_year + 1900,
             now->tm_mon + 1,
             now->tm_mday);
@@ -2856,7 +2870,8 @@ int main(int argc, char** argv) {
     loguru::g_preamble_file = false;
     loguru::g_flush_interval_ms = 100;
     loguru::init(argc, argv);
-    loguru::add_file(logFileName, loguru::Append, loguru::Verbosity_INFO);
+    if (fileLoggingEnabled)
+        loguru::add_file(logFileName, loguru::Append, loguru::Verbosity_INFO);
     loguru::g_stderr_verbosity = 1;
 
     srand(time(0));
