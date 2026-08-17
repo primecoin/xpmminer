@@ -31,14 +31,13 @@ endif()
 
 message(STATUS "Metal framework: ${METAL_FRAMEWORK}")
 
-# Find libwebsockets (for getwork protocol)
-find_package(Libwebsockets QUIET)
-if(Libwebsockets_FOUND)
-    message(STATUS "libwebsockets found: ${Libwebsockets_VERSION}")
-else()
-    message(STATUS "libwebsockets not found. getwork protocol required for Metal miner.")
-    message(STATUS "  Install: brew install libwebsockets")
-    return()
+# libwebsockets is detected by the top-level configuration.
+if(NOT Libwebsockets_FOUND)
+    message(FATAL_ERROR
+      "The Metal miner requires libwebsockets for blocktree.get_work support. "
+      "Install the libwebsockets development files and rerun CMake, or disable "
+      "the Metal miner target."
+    )
 endif()
 
 # Compiler settings

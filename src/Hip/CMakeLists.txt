@@ -18,8 +18,10 @@ list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH})
 find_package(HIP QUIET)
 
 if (NOT HIP_FOUND)
-    message(STATUS "HIP not found. Skipping HIP miner build.")
-    message(STATUS "  To build HIP miner, install ROCm from https://rocm.docs.amd.com/")
+    message(STATUS
+      "ROCm/HIP was not found, so the HIP miner will not be built. "
+      "Install the ROCm/HIP development files and rerun CMake."
+    )
     return()
 endif()
 
@@ -33,20 +35,15 @@ find_library(HIP_HIPRTC_LIBRARY hiprtc
 )
 
 if (NOT HIP_HIPRTC_LIBRARY)
-    message(STATUS "HIPRTC library not found. Skipping HIP miner build.")
+    message(STATUS
+      "The HIP runtime compilation library (HIPRTC) was not found, so the "
+      "HIP miner will not be built. Install the ROCm/HIP development files "
+      "and rerun CMake."
+    )
     return()
 endif()
 
 message(STATUS "HIPRTC library: ${HIP_HIPRTC_LIBRARY}")
-
-# Find libwebsockets (for getwork protocol)
-find_package(Libwebsockets QUIET)
-if (Libwebsockets_FOUND)
-    message(STATUS "libwebsockets found: ${Libwebsockets_VERSION}")
-else()
-    message(STATUS "libwebsockets not found. getwork protocol will not be available.")
-    message(STATUS "  To enable getwork: install libwebsockets-dev (Debian/Ubuntu) or libwebsockets (other)")
-endif()
 
 # Compiler flags
 set(CMAKE_CXX_STANDARD 14)

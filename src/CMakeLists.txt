@@ -39,8 +39,19 @@ endif()
 find_package(Libwebsockets QUIET)
 if (Libwebsockets_FOUND)
     message(STATUS "libwebsockets found: ${Libwebsockets_VERSION}")
+elseif(APPLE AND BUILDMETALMINER)
+    message(FATAL_ERROR
+      "Required dependency libwebsockets was not found.\n"
+      "The Metal miner requires it for WebSocket blocktree.get_work support.\n"
+      "Install the libwebsockets development files and rerun CMake, or disable "
+      "the Metal miner target."
+    )
 else()
-    message(STATUS "libwebsockets not found. getwork protocol will not be available.")
+    message(WARNING
+      "Optional dependency libwebsockets was not found.\n"
+      "WebSocket blocktree.get_work mining will not be available.\n"
+      "Install the libwebsockets development files and rerun CMake to enable it."
+    )
 endif()
 
 include(FindDependencies)

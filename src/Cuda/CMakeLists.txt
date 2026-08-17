@@ -21,10 +21,10 @@ endif()
 
 # If CUDA not found, skip building
 if (NOT CUDA_FOUND)
-  message(STATUS "CUDA not found. Skipping CUDA miner build.")
-  message(STATUS "  To build CUDA miner, install NVIDIA CUDA Toolkit:")
-  message(STATUS "  Ubuntu/Debian: sudo apt install nvidia-cuda-toolkit")
-  message(STATUS "  Or download from: https://developer.nvidia.com/cuda-downloads")
+  message(STATUS
+    "CUDA Toolkit was not found, so the CUDA miner will not be built. "
+    "Install the NVIDIA CUDA Toolkit development files and rerun CMake."
+  )
   return()
 endif()
 
@@ -116,10 +116,16 @@ else()
   )
 
   if (NOT CUDA_DRIVER_LIBRARY)
-    message(FATAL_ERROR "CUDA driver library (libcuda) not found")
+    message(FATAL_ERROR
+      "The CUDA driver development library (libcuda) was not found. "
+      "Install the NVIDIA CUDA development files and rerun CMake."
+    )
   endif()
   if (NOT CUDA_nvrtc_LIBRARY)
-    message(FATAL_ERROR "CUDA NVRTC library (libnvrtc) not found")
+    message(FATAL_ERROR
+      "The CUDA runtime compilation library (libnvrtc) was not found. "
+      "Install the NVIDIA CUDA Toolkit development files and rerun CMake."
+    )
   endif()
 
   target_link_libraries(xpmcuda
