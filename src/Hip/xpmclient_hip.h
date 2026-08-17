@@ -59,6 +59,23 @@ struct config_t {
     uint32_t LIMIT15;
 };
 
+struct MiningBenchmarkResult {
+    bool completed;
+    double elapsedSeconds;
+    double effectiveScanGps;
+    double sieveCandidatesPerSecond;
+    double finalCandidatesPerSecond;
+    uint64_t pipelineErrors;
+
+    MiningBenchmarkResult()
+        : completed(false),
+          elapsedSeconds(0.0),
+          effectiveScanGps(0.0),
+          sieveCandidatesPerSecond(0.0),
+          finalCandidatesPerSecond(0.0),
+          pipelineErrors(0) {}
+};
+
 struct HIPDeviceInfo {
     int index;
     hipDevice_t device;
@@ -190,7 +207,11 @@ class PrimeMiner {
         unsigned LSize);
     ~PrimeMiner();
 
-    bool Initialize(hipCtx_t context, hipDevice_t device, hipModule_t module);
+    bool Initialize(
+        hipCtx_t context,
+        hipDevice_t device,
+        hipModule_t module,
+        bool reportConfiguration = true);
 
     config_t getConfig() {
         return mConfig;
@@ -198,7 +219,13 @@ class PrimeMiner {
 
     bool MakeExit;
     void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
-    void MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds = 0);
+    MiningBenchmarkResult MiningGetWork(
+        GetWorkContext* ctx,
+        unsigned benchmarkSeconds = 0,
+        bool reportBenchmarkResults = true);
+    MiningBenchmarkResult BenchmarkMining(
+        unsigned benchmarkSeconds,
+        bool reportResults = false);
 
    private:
     void FermatInit(pipeline_t& fermat, unsigned mfs);

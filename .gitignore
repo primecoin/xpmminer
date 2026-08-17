@@ -1,6 +1,12 @@
 build
 .vscode
 
+# HIP runtime compilation and autotuning caches
+xpmhip-cache/
+kernelxpm_*.hipbin
+kernelxpm_*.hipbin.fingerprint
+.xpmhip-autotune-*.cfg
+
 # nix build
 result/
 

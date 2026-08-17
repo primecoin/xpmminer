@@ -8,10 +8,17 @@
  */
 
 #include <getopt.h>
+#include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <cctype>
+#include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <memory>
 #include <set>
+#include <sstream>
+#include <sys/stat.h>
 #include "benchmarks_hip.h"
 #include "gprimes.h"
 #include "primecoin.h"
@@ -143,6 +150,8 @@ void prepareJsonMidstate(const JsonWork& work, JsonMidstateData* data) {
 }
 
 unsigned gDebug = 0;
+static bool gHipAutoTune = true;
+static bool gHipRetune = false;
 int gExtensionsNum = 9;
 int gPrimorial = 19;
 int gSieveSize = 10;
@@ -205,7 +214,8 @@ PrimeMiner::~PrimeMiner() {
 bool PrimeMiner::Initialize(
     hipCtx_t context,
     hipDevice_t device,
-    hipModule_t module) {
+    hipModule_t module,
+    bool reportConfiguration) {
     _context = context;
     hipCtxSetCurrent(context);
 
@@ -245,21 +255,24 @@ bool PrimeMiner::Initialize(
         mConfig = *config._hostData;
     }
 
-    LOG_F(
-        INFO,
-        "N=%d SIZE=%d STRIPES=%d WIDTH=%d PCOUNT=%d TARGET=%d",
-        mConfig.N,
-        mConfig.SIZE,
-        mConfig.STRIPES,
-        mConfig.WIDTH,
-        mConfig.PCOUNT,
-        mConfig.TARGET);
+    if (reportConfiguration) {
+        LOG_F(
+            INFO,
+            "N=%d SIZE=%d STRIPES=%d WIDTH=%d PCOUNT=%d TARGET=%d",
+            mConfig.N,
+            mConfig.SIZE,
+            mConfig.STRIPES,
+            mConfig.WIDTH,
+            mConfig.PCOUNT,
+            mConfig.TARGET);
+    }
 
     int computeUnits;
     HIP_SAFE_CALL(hipDeviceGetAttribute(
         &computeUnits, hipDeviceAttributeMultiprocessorCount, device));
     mBlockSize = computeUnits * 4 * 64;
-    LOG_F(INFO, "GPU %d: has %d CUs", mID, computeUnits);
+    if (reportConfiguration)
+        LOG_F(INFO, "GPU %d: has %d CUs", mID, computeUnits);
     return true;
 }
 
@@ -1127,7 +1140,11 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     LOG_F(INFO, "GPU %d stopped.", mID);
 }
 
-void PrimeMiner::MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds) {
+MiningBenchmarkResult PrimeMiner::MiningGetWork(
+    GetWorkContext* ctx,
+    unsigned benchmarkSeconds,
+    bool reportBenchmarkResults) {
+    MiningBenchmarkResult benchmarkResult;
     hipCtxSetCurrent(_context);
     const bool benchmarkMode = benchmarkSeconds > 0;
     time_t starttime = time(0);
@@ -2101,66 +2118,269 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds) {
                 const double retainedPercent = benchmarkGpuMatches == 0 ? 100.0 :
                     100.0 * (double)benchmarkMatchesRetained /
                         (double)benchmarkGpuMatches;
-                LOG_F(INFO, "");
-                LOG_F(INFO, "=== End-to-end blocktree.get_work benchmark (HIP) ===");
-                LOG_F(INFO,
-                      "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
-                      "LSIZE=%u, sieves/round=%u, Fermat batch=%u, "
-                      "hash coefficient=%u",
-                      mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT,
-                      mLSize, mSievePerRound, mBlockSize, numHashCoeff);
-                LOG_F(INFO,
-                      "Wall time: %.3f s, loop iterations: %u, sieve jobs: %llu",
-                      elapsed, iteration,
-                      (unsigned long long)benchmarkSieveJobs);
-                LOG_F(INFO,
-                      "JSON hashes dispatched: %.3f M/s (%llu total)",
-                      benchmarkHashesDispatched / elapsed / 1000000.0,
-                      (unsigned long long)benchmarkHashesDispatched);
-                LOG_F(INFO,
-                      "GPU hash matches: %.1f/s; retained for CPU: %.1f/s "
-                      "(%.4f%% retained)",
-                      benchmarkGpuMatches / elapsed,
-                      benchmarkMatchesRetained / elapsed,
-                      retainedPercent);
-                LOG_F(INFO,
-                      "CPU-validated hashes feeding sieve: %.1f/s",
-                      benchmarkValidHashes / elapsed);
-                LOG_F(INFO,
-                      "Effective end-to-end sieve scan: %.3f G/s",
-                      sieveRange * benchmarkSieveJobs / elapsed / 1000000000.0);
-                LOG_F(INFO,
-                      "Sieve candidates feeding Fermat: %.1f/s (%llu total)",
-                      benchmarkSieveCandidates / elapsed,
-                      (unsigned long long)benchmarkSieveCandidates);
-                LOG_F(INFO,
-                      "Final GPU candidates: %.1f/s; CPU chain checks: %.1f/s; "
-                      "shares meeting target: %llu",
-                      benchmarkFinalCandidates / elapsed,
-                      benchmarkCpuCandidates / elapsed,
-                      (unsigned long long)benchmarkShares);
-                LOG_F(INFO,
-                      "Hash-starved loop iterations: %llu; pipeline validation errors: %llu",
-                      (unsigned long long)benchmarkHashStarvations,
-                      (unsigned long long)benchmarkPipelineErrors);
-                LOG_F(INFO, "======================================================");
+                benchmarkResult.completed = benchmarkSieveJobs > 0 &&
+                    benchmarkPipelineErrors == 0;
+                benchmarkResult.elapsedSeconds = elapsed;
+                benchmarkResult.effectiveScanGps =
+                    sieveRange * benchmarkSieveJobs / elapsed / 1000000000.0;
+                benchmarkResult.sieveCandidatesPerSecond =
+                    benchmarkSieveCandidates / elapsed;
+                benchmarkResult.finalCandidatesPerSecond =
+                    benchmarkFinalCandidates / elapsed;
+                benchmarkResult.pipelineErrors = benchmarkPipelineErrors;
+
+                if (reportBenchmarkResults) {
+                    LOG_F(INFO, "");
+                    LOG_F(INFO, "=== End-to-end blocktree.get_work benchmark (HIP) ===");
+                    LOG_F(INFO,
+                          "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
+                          "LSIZE=%u, sieves/round=%u, Fermat batch=%u, "
+                          "hash coefficient=%u",
+                          mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT,
+                          mLSize, mSievePerRound, mBlockSize, numHashCoeff);
+                    LOG_F(INFO,
+                          "Wall time: %.3f s, loop iterations: %u, sieve jobs: %llu",
+                          elapsed, iteration,
+                          (unsigned long long)benchmarkSieveJobs);
+                    LOG_F(INFO,
+                          "JSON hashes dispatched: %.3f M/s (%llu total)",
+                          benchmarkHashesDispatched / elapsed / 1000000.0,
+                          (unsigned long long)benchmarkHashesDispatched);
+                    LOG_F(INFO,
+                          "GPU hash matches: %.1f/s; retained for CPU: %.1f/s "
+                          "(%.4f%% retained)",
+                          benchmarkGpuMatches / elapsed,
+                          benchmarkMatchesRetained / elapsed,
+                          retainedPercent);
+                    LOG_F(INFO,
+                          "CPU-validated hashes feeding sieve: %.1f/s",
+                          benchmarkValidHashes / elapsed);
+                    LOG_F(INFO,
+                          "Effective end-to-end sieve scan: %.3f G/s",
+                          benchmarkResult.effectiveScanGps);
+                    LOG_F(INFO,
+                          "Sieve candidates feeding Fermat: %.1f/s (%llu total)",
+                          benchmarkResult.sieveCandidatesPerSecond,
+                          (unsigned long long)benchmarkSieveCandidates);
+                    LOG_F(INFO,
+                          "Final GPU candidates: %.1f/s; CPU chain checks: %.1f/s; "
+                          "shares meeting target: %llu",
+                          benchmarkResult.finalCandidatesPerSecond,
+                          benchmarkCpuCandidates / elapsed,
+                          (unsigned long long)benchmarkShares);
+                    LOG_F(INFO,
+                          "Hash-starved loop iterations: %llu; pipeline validation errors: %llu",
+                          (unsigned long long)benchmarkHashStarvations,
+                          (unsigned long long)benchmarkPipelineErrors);
+                    LOG_F(INFO, "======================================================");
+                }
                 break;
             }
         }
     }
 
-    LOG_F(INFO, "GPU %d stopped.", mID);
+    HIP_SAFE_CALL(hipEventDestroy(sieveEvent));
+    if (!benchmarkMode || reportBenchmarkResults)
+        LOG_F(INFO, "GPU %d stopped.", mID);
+    return benchmarkResult;
 }
 
-void dumpSieveConstants(
-    unsigned weaveDepth,
-    unsigned threadsNum,
-    unsigned windowSize,
-    unsigned* primes,
-    std::ostream& file) {
+MiningBenchmarkResult PrimeMiner::BenchmarkMining(
+    unsigned benchmarkSeconds,
+    bool reportResults) {
+    return MiningGetWork(nullptr, benchmarkSeconds, reportResults);
+}
+
+namespace {
+
+struct HipKernelConfig {
+    unsigned size;
+    unsigned stripes;
+    unsigned primeCount;
+    unsigned lsize;
+    unsigned nlifo;
+};
+
+struct TunedHipModule {
+    HipKernelConfig config;
+    hipModule_t module;
+    MiningBenchmarkResult result;
+    bool usable;
+
+    explicit TunedHipModule(const HipKernelConfig& value)
+        : config(value), module(nullptr), usable(false) {}
+};
+
+constexpr unsigned kHipAutotuneCacheVersion = 2;
+constexpr unsigned kHipPrefetchDepths[] = {1, 2, 4, 6, 8, 12, 16};
+constexpr unsigned kHipAutotuneScreenSeconds = 1;
+constexpr unsigned kHipAutotuneFinalSeconds = 2;
+constexpr size_t kHipAutotuneFinalistCount = 3;
+constexpr const char* kHipCacheDirectory = "xpmhip-cache";
+
+bool ensureHipCacheDirectory() {
+    struct stat info{};
+    if (stat(kHipCacheDirectory, &info) == 0) {
+        if (S_ISDIR(info.st_mode))
+            return true;
+        LOG_F(
+            ERROR,
+            "HIP cache path exists but is not a directory: %s",
+            kHipCacheDirectory);
+        return false;
+    }
+    if (errno != ENOENT) {
+        LOG_F(
+            ERROR,
+            "Could not inspect HIP cache directory %s: %s",
+            kHipCacheDirectory,
+            std::strerror(errno));
+        return false;
+    }
+    if (mkdir(kHipCacheDirectory, 0755) == 0)
+        return true;
+    if (errno == EEXIST && stat(kHipCacheDirectory, &info) == 0 &&
+        S_ISDIR(info.st_mode)) {
+        return true;
+    }
+    LOG_F(
+        ERROR,
+        "Could not create HIP cache directory %s: %s",
+        kHipCacheDirectory,
+        std::strerror(errno));
+    return false;
+}
+
+std::string safeArchitectureName(const char* architecture) {
+    std::string result = architecture ? architecture : "unknown";
+    for (char& value : result) {
+        if (!std::isalnum(static_cast<unsigned char>(value)) &&
+            value != '-' && value != '_') {
+            value = '_';
+        }
+    }
+    return result;
+}
+
+unsigned exactLog2(unsigned value) {
+    unsigned result = 0;
+    while (value > 1) {
+        value >>= 1;
+        ++result;
+    }
+    return result;
+}
+
+bool isUsableHipConfig(
+    const HipKernelConfig& config,
+    const hipDeviceProp_t& properties) {
+    if (config.size == 0 || config.stripes == 0 ||
+        (config.stripes & 1u) || config.primeCount == 0) {
+        return false;
+    }
+    if (config.lsize < 128 || config.lsize > 1024 ||
+        (config.lsize & (config.lsize - 1)) != 0 ||
+        config.primeCount % config.lsize != 0 ||
+        config.nlifo < 1 || config.nlifo > 16 ||
+        config.primeCount / config.lsize <= config.nlifo) {
+        return false;
+    }
+    if (config.lsize > (unsigned)properties.maxThreadsPerBlock)
+        return false;
+    if ((size_t)config.size * sizeof(uint32_t) >
+        properties.sharedMemPerBlock) {
+        return false;
+    }
+    return ((uint64_t)config.size * config.stripes / 2) % 256 == 0;
+}
+
+std::vector<HipKernelConfig> hipAutotuneCandidates(
+    const hipDeviceProp_t& properties) {
+    std::vector<HipKernelConfig> result;
+    auto add = [&](unsigned size,
+                   unsigned stripes,
+                   unsigned primeCount,
+                   unsigned lsize) {
+        HipKernelConfig candidate{size, stripes, primeCount, lsize, 4};
+        if (!isUsableHipConfig(candidate, properties))
+            return;
+        for (const HipKernelConfig& existing : result) {
+            if (existing.size == candidate.size &&
+                existing.stripes == candidate.stripes &&
+                existing.primeCount == candidate.primeCount &&
+                existing.lsize == candidate.lsize &&
+                existing.nlifo == candidate.nlifo) {
+                return;
+            }
+        }
+        result.push_back(candidate);
+    };
+
+    // These geometries cover approximately the same 82.6M-number range.
+    // Smaller SIZE values trade more workgroups for lower per-workgroup LDS.
+    const unsigned preferredLSize = 256;
+    add(12288, 210, 65536, preferredLSize); // historical safe baseline
+    add(8192, 316, 65536, preferredLSize);
+    add(6144, 420, 65536, preferredLSize);
+
+    // Radeon is normally wave32 and Instinct is normally wave64. Both benefit
+    // from measuring more than one wave count instead of inheriting CUDA's
+    // original 1024-thread launch geometry.
+    add(8192, 316, 65536, properties.warpSize <= 32 ? 128 : 512);
+    add(8192, 316, 65536, 512);
+    if (properties.warpSize >= 64)
+        add(8192, 316, 65536, 1024);
+
+    // A shallower weave reduces sieve work but sends more survivors to the
+    // Fermat pipeline. The real-pipeline score decides whether that trade wins.
+    add(8192, 316, 32768, preferredLSize);
+    add(8192, 316, 32768, 512);
+    return result;
+}
+
+std::string hipKernelCacheName(
+    const HIPDeviceInfo& device,
+    const HipKernelConfig& config) {
+    std::ostringstream stream;
+    stream << kHipCacheDirectory << "/kernelxpm_"
+           << safeArchitectureName(device.gcnArchName)
+           << "_s" << config.size << "_t" << config.stripes
+           << "_p" << config.primeCount << "_l" << config.lsize
+           << "_f" << config.nlifo
+           << ".hipbin";
+    return stream.str();
+}
+
+std::string hipAutotuneCacheName(
+    const HIPDeviceInfo& device,
+    const hipDeviceProp_t& properties) {
+    int runtimeVersion = 0;
+    hipRuntimeGetVersion(&runtimeVersion);
+    std::ostringstream stream;
+    stream << kHipCacheDirectory << "/autotune-"
+           << safeArchitectureName(device.gcnArchName) << '-'
+           << safeArchitectureName(properties.name) << "-cu"
+           << properties.multiProcessorCount << "-rt" << runtimeVersion
+           << ".cfg";
+    return stream.str();
+}
+
+bool compileHipModule(
+    const HIPDeviceInfo& device,
+    const HipKernelConfig& config,
+    hipModule_t* module,
+    bool verbose) {
+    if (!ensureHipCacheDirectory())
+        return false;
+
+    const unsigned width = 20;
+    const unsigned target = 10;
+    const unsigned multiplierSizeLimits[3] = {24, 31, 35};
     unsigned ranges[3] = {0, 0, 0};
-    for (unsigned i = 0; i < weaveDepth / threadsNum; i++) {
-        unsigned prime = primes[i * threadsNum];
+    const unsigned primeGroups = config.primeCount / config.lsize;
+    const unsigned windowSize = config.size * 32;
+    for (unsigned i = 0; i < primeGroups; ++i) {
+        unsigned prime = gPrimes[13 + i * config.lsize];
         if (ranges[0] == 0 && windowSize / prime <= 2)
             ranges[0] = i;
         if (ranges[1] == 0 && windowSize / prime <= 1)
@@ -2168,11 +2388,369 @@ void dumpSieveConstants(
         if (ranges[2] == 0 && windowSize / prime == 0)
             ranges[2] = i;
     }
+    if (ranges[0] == 0)
+        ranges[0] = primeGroups;
+    if (ranges[1] == 0)
+        ranges[1] = primeGroups;
+    if (ranges[2] == 0)
+        ranges[2] = primeGroups;
 
-    file << "#define SIEVERANGE1 " << ranges[0] << "\n";
-    file << "#define SIEVERANGE2 " << ranges[1] << "\n";
-    file << "#define SIEVERANGE3 " << ranges[2] << "\n";
+    std::vector<std::string> ownedOptions;
+    auto define = [&](const char* name, unsigned value) {
+        ownedOptions.push_back(
+            std::string("-D") + name + "=" + std::to_string(value));
+    };
+    ownedOptions.push_back(
+        std::string("--offload-arch=") + device.gcnArchName);
+    ownedOptions.push_back("-Ixpm/cuda");
+    ownedOptions.push_back("-I../src/Hip");
+    ownedOptions.push_back("-I/opt/rocm/include");
+    define("STRIPES", config.stripes);
+    define("WIDTH", width);
+    define("PCOUNT", config.primeCount);
+    define("TARGET", target);
+    define("SIZE", config.size);
+    define("LSIZE", config.lsize);
+    define("LSIZELOG2", exactLog2(config.lsize));
+    define("NLIFO", config.nlifo);
+    define("LIMIT13", multiplierSizeLimits[0]);
+    define("LIMIT14", multiplierSizeLimits[1]);
+    define("LIMIT15", multiplierSizeLimits[2]);
+    define("SIEVERANGE1", ranges[0]);
+    define("SIEVERANGE2", ranges[1]);
+    define("SIEVERANGE3", ranges[2]);
+
+    std::vector<const char*> options;
+    options.reserve(ownedOptions.size());
+    for (const std::string& option : ownedOptions)
+        options.push_back(option.c_str());
+
+    const std::vector<const char*> sources = {
+        "xpm/cuda/fermat_hip.cpp",
+        "xpm/cuda/procs_hip.cpp",
+        "xpm/cuda/sieve_hip.cpp",
+        "xpm/cuda/sha256_hip.cpp",
+        "xpm/cuda/json_sha256_hip.cpp",
+        "xpm/cuda/benchmarks_kernels_hip.cpp"};
+    const std::string kernelName = hipKernelCacheName(device, config);
+    HIP_SAFE_CALL(hipCtxSetCurrent(device.context));
+    return hipCompileKernel(
+        kernelName.c_str(),
+        sources,
+        options.data(),
+        (int)options.size(),
+        module,
+        device.majorComputeCapability,
+        device.minorComputeCapability,
+        false,
+        verbose);
 }
+
+bool loadHipAutotuneCache(
+    const HIPDeviceInfo& device,
+    const hipDeviceProp_t& properties,
+    HipKernelConfig* config,
+    double* score) {
+    if (!ensureHipCacheDirectory())
+        return false;
+    std::ifstream file(hipAutotuneCacheName(device, properties));
+    unsigned version = 0;
+    HipKernelConfig cached{};
+    double cachedScore = 0.0;
+    if (!(file >> version >> cached.size >> cached.stripes >>
+          cached.primeCount >> cached.lsize >> cached.nlifo >> cachedScore) ||
+        version != kHipAutotuneCacheVersion ||
+        !isUsableHipConfig(cached, properties)) {
+        return false;
+    }
+    *config = cached;
+    *score = cachedScore;
+    return true;
+}
+
+void saveHipAutotuneCache(
+    const HIPDeviceInfo& device,
+    const hipDeviceProp_t& properties,
+    const HipKernelConfig& config,
+    double score) {
+    if (!ensureHipCacheDirectory())
+        return;
+    const std::string path = hipAutotuneCacheName(device, properties);
+    std::ofstream file(path, std::ofstream::trunc);
+    file << kHipAutotuneCacheVersion << ' ' << config.size << ' '
+         << config.stripes << ' ' << config.primeCount << ' '
+         << config.lsize << ' ' << config.nlifo << ' '
+         << std::setprecision(17) << score << '\n';
+    if (!file)
+        LOG_F(WARNING, "Could not save HIP autotune result to %s", path.c_str());
+}
+
+bool selectHipConfiguration(
+    const HIPDeviceInfo& device,
+    unsigned devicesNum,
+    unsigned depth,
+    HipKernelConfig* selectedConfig,
+    hipModule_t* selectedModule) {
+    hipDeviceProp_t properties{};
+    HIP_SAFE_CALL(hipGetDeviceProperties(&properties, device.index));
+    const HipKernelConfig safeConfig{12288, 210, 65536, 256, 4};
+
+    if (!gHipAutoTune) {
+        *selectedConfig = safeConfig;
+        if (!compileHipModule(device, safeConfig, selectedModule, true))
+            return false;
+        LOG_F(
+            INFO,
+            "HIP autotune disabled; using LSIZE=%u SIZE=%u STRIPES=%u "
+            "PCOUNT=%u NLIFO=%u",
+            safeConfig.lsize,
+            safeConfig.size,
+            safeConfig.stripes,
+            safeConfig.primeCount,
+            safeConfig.nlifo);
+        return true;
+    }
+
+    HipKernelConfig cachedConfig{};
+    double cachedScore = 0.0;
+    if (!gHipRetune &&
+        loadHipAutotuneCache(
+            device, properties, &cachedConfig, &cachedScore)) {
+        if (compileHipModule(
+                device, cachedConfig, selectedModule, gDebug != 0)) {
+            *selectedConfig = cachedConfig;
+            LOG_F(
+                INFO,
+                "HIP autotune cache selected LSIZE=%u SIZE=%u STRIPES=%u "
+                "PCOUNT=%u NLIFO=%u (%.3f G/s)",
+                cachedConfig.lsize,
+                cachedConfig.size,
+                cachedConfig.stripes,
+                cachedConfig.primeCount,
+                cachedConfig.nlifo,
+                cachedScore);
+            return true;
+        }
+        LOG_F(WARNING, "Cached HIP configuration could not be loaded; retuning");
+    }
+
+    const std::vector<HipKernelConfig> candidates =
+        hipAutotuneCandidates(properties);
+    if (candidates.empty()) {
+        LOG_F(ERROR, "No HIP autotune configuration fits this device");
+        return false;
+    }
+
+    size_t prefetchVariantCount = 0;
+    for (unsigned depthValue : kHipPrefetchDepths) {
+        if (depthValue != 4)
+            ++prefetchVariantCount;
+    }
+    const size_t totalConfigurations =
+        candidates.size() + prefetchVariantCount;
+    LOG_F(
+        INFO,
+        "Starting HIP autotune on GPU %d (%zu staged configurations; first "
+        "run may take a while, results are cached)...",
+        device.index,
+        totalConfigurations);
+    const bool showProgress = !gDebug && isatty(fileno(stderr));
+    const size_t progressTotal =
+        totalConfigurations * 2 + kHipAutotuneFinalistCount;
+    auto renderProgress = [&](size_t completed) {
+        if (!showProgress)
+            return;
+        constexpr size_t barWidth = 28;
+        const size_t filled = completed * barWidth / progressTotal;
+        const size_t percent = completed * 100 / progressTotal;
+        fprintf(stderr, "\rHIP autotune GPU %d [", device.index);
+        for (size_t i = 0; i < barWidth; ++i)
+            fputc(i < filled ? '#' : '-', stderr);
+        fprintf(
+            stderr,
+            "] %3zu%% (%zu/%zu)",
+            percent,
+            completed,
+            progressTotal);
+        if (completed == progressTotal)
+            fputc('\n', stderr);
+        fflush(stderr);
+    };
+
+    const auto oldStderrVerbosity = loguru::g_stderr_verbosity;
+    if (!gDebug)
+        loguru::g_stderr_verbosity = loguru::Verbosity_ERROR;
+
+    std::vector<TunedHipModule> modules;
+    modules.reserve(totalConfigurations);
+    size_t progress = 0;
+    renderProgress(progress);
+    for (const HipKernelConfig& candidate : candidates) {
+        modules.emplace_back(candidate);
+        TunedHipModule& compiled = modules.back();
+        if (compileHipModule(
+                device, candidate, &compiled.module, gDebug != 0)) {
+            compiled.usable = true;
+        }
+        renderProgress(++progress);
+    }
+
+    int bestIndex = -1;
+    double bestScore = 0.0;
+    auto benchmarkCandidate = [&](size_t i,
+                                  unsigned benchmarkSeconds,
+                                  const char* phase,
+                                  size_t phaseIndex,
+                                  size_t phaseCount) {
+        TunedHipModule& candidate = modules[i];
+        if (candidate.usable) {
+            PrimeMiner miner(
+                device.index,
+                devicesNum,
+                5,
+                depth,
+                candidate.config.lsize);
+            if (miner.Initialize(
+                    device.context, device.device, candidate.module, false)) {
+                candidate.result =
+                    miner.BenchmarkMining(benchmarkSeconds, false);
+                if (candidate.result.completed &&
+                    (bestIndex < 0 ||
+                     candidate.result.effectiveScanGps > bestScore)) {
+                    bestIndex = (int)i;
+                    bestScore = candidate.result.effectiveScanGps;
+                }
+                if (gDebug) {
+                    LOG_F(
+                        INFO,
+                        "HIP autotune %s %zu/%zu: LSIZE=%u SIZE=%u "
+                        "STRIPES=%u PCOUNT=%u NLIFO=%u => %.3f G/s, "
+                        "%.1f candidates/s, errors=%llu",
+                        phase,
+                        phaseIndex,
+                        phaseCount,
+                        candidate.config.lsize,
+                        candidate.config.size,
+                        candidate.config.stripes,
+                        candidate.config.primeCount,
+                        candidate.config.nlifo,
+                        candidate.result.effectiveScanGps,
+                        candidate.result.sieveCandidatesPerSecond,
+                        (unsigned long long)candidate.result.pipelineErrors);
+                }
+            }
+        }
+        renderProgress(++progress);
+    };
+
+    const size_t geometryCount = modules.size();
+    for (size_t i = 0; i < geometryCount; ++i)
+        benchmarkCandidate(
+            i,
+            kHipAutotuneScreenSeconds,
+            "screen",
+            i + 1,
+            totalConfigurations);
+
+    if (bestIndex >= 0) {
+        const HipKernelConfig bestGeometry = modules[bestIndex].config;
+        const size_t prefetchBegin = modules.size();
+        for (unsigned depthValue : kHipPrefetchDepths) {
+            if (depthValue == bestGeometry.nlifo)
+                continue;
+            HipKernelConfig candidate = bestGeometry;
+            candidate.nlifo = depthValue;
+            modules.emplace_back(candidate);
+            TunedHipModule& compiled = modules.back();
+            if (isUsableHipConfig(candidate, properties) &&
+                compileHipModule(
+                    device, candidate, &compiled.module, gDebug != 0)) {
+                compiled.usable = true;
+            }
+            renderProgress(++progress);
+        }
+        for (size_t i = prefetchBegin; i < modules.size(); ++i)
+            benchmarkCandidate(
+                i,
+                kHipAutotuneScreenSeconds,
+                "screen",
+                i + 1,
+                totalConfigurations);
+
+        std::vector<size_t> finalists;
+        for (size_t i = 0; i < modules.size(); ++i) {
+            const HipKernelConfig& config = modules[i].config;
+            if (modules[i].result.completed &&
+                config.size == bestGeometry.size &&
+                config.stripes == bestGeometry.stripes &&
+                config.primeCount == bestGeometry.primeCount &&
+                config.lsize == bestGeometry.lsize) {
+                finalists.push_back(i);
+            }
+        }
+        std::sort(
+            finalists.begin(),
+            finalists.end(),
+            [&](size_t lhs, size_t rhs) {
+                return modules[lhs].result.effectiveScanGps >
+                    modules[rhs].result.effectiveScanGps;
+            });
+        if (finalists.size() > kHipAutotuneFinalistCount)
+            finalists.resize(kHipAutotuneFinalistCount);
+
+        const int screenBestIndex = bestIndex;
+        const double screenBestScore = bestScore;
+        bestIndex = -1;
+        bestScore = 0.0;
+        for (size_t rank = 0; rank < finalists.size(); ++rank) {
+            benchmarkCandidate(
+                finalists[rank],
+                kHipAutotuneFinalSeconds,
+                "finalist",
+                rank + 1,
+                finalists.size());
+        }
+        if (bestIndex < 0) {
+            bestIndex = screenBestIndex;
+            bestScore = screenBestScore;
+        }
+        if (progress < progressTotal)
+            renderProgress(progressTotal);
+    }
+
+    loguru::g_stderr_verbosity = oldStderrVerbosity;
+
+    if (bestIndex < 0) {
+        LOG_F(ERROR, "HIP autotune found no correct, usable configuration");
+        for (TunedHipModule& candidate : modules) {
+            if (candidate.module)
+                hipModuleUnload(candidate.module);
+        }
+        return false;
+    }
+
+    *selectedConfig = modules[bestIndex].config;
+    *selectedModule = modules[bestIndex].module;
+    modules[bestIndex].module = nullptr;
+    for (TunedHipModule& candidate : modules) {
+        if (candidate.module)
+            hipModuleUnload(candidate.module);
+    }
+    saveHipAutotuneCache(device, properties, *selectedConfig, bestScore);
+    LOG_F(
+        INFO,
+        "HIP autotune selected LSIZE=%u SIZE=%u STRIPES=%u PCOUNT=%u "
+        "NLIFO=%u (end-to-end %.3f G/s)",
+        selectedConfig->lsize,
+        selectedConfig->size,
+        selectedConfig->stripes,
+        selectedConfig->primeCount,
+        selectedConfig->nlifo,
+        bestScore);
+    return true;
+}
+
+} // namespace
 
 enum CmdLineOptions {
     clDebug = 0,
@@ -2190,6 +2768,8 @@ enum CmdLineOptions {
     clWorkerId,
     clProtocol,
     clWsUrl,
+    clNoHipAutotune,
+    clHipRetune,
     clHelp,
     clOptionLast,
     clOptionsNum
@@ -2213,6 +2793,10 @@ void printHelpMessage() {
         "  --protocol <getblocktemplate|getwork>: mining protocol (default: getblocktemplate)\n");
     printf(
         "  --ws-url <ws://host:port>: WebSocket URL for getwork protocol (required if --protocol getwork)\n");
+    printf(
+        "  --no-hip-autotune: use the safe HIP kernel configuration without tuning\n");
+    printf(
+        "  --hip-retune: ignore the cached HIP configuration and tune again\n");
     printf(
         "  --extensions-num <number>: Eratosthenes sieve extensions number (default: %u)\n",
         gExtensionsNum);
@@ -2248,6 +2832,8 @@ void initCmdLineOptions(option* options) {
     options[clWorkerId] = {"worker-id", required_argument, &extraNonce, 0};
     options[clProtocol] = {"protocol", required_argument, 0, 0};
     options[clWsUrl] = {"ws-url", required_argument, 0, 0};
+    options[clNoHipAutotune] = {"no-hip-autotune", no_argument, 0, 0};
+    options[clHipRetune] = {"hip-retune", no_argument, 0, 0};
     options[clHelp] = {"help", no_argument, 0, 'h'};
     options[clOptionLast] = {0, 0, 0, 0};
 }
@@ -2312,6 +2898,12 @@ int main(int argc, char** argv) {
                     case clWsUrl:
                         gWsUrl = optarg;
                         break;
+                    case clNoHipAutotune:
+                        gHipAutoTune = false;
+                        break;
+                    case clHipRetune:
+                        gHipRetune = true;
+                        break;
                 }
                 break;
             case 'b':
@@ -2350,6 +2942,13 @@ int main(int argc, char** argv) {
         fprintf(
             stderr,
             "Error: choose either --benchmark or --mining-benchmark\n");
+        exit(1);
+    }
+
+    if (!gHipAutoTune && gHipRetune) {
+        fprintf(
+            stderr,
+            "Error: --hip-retune cannot be combined with --no-hip-autotune\n");
         exit(1);
     }
 
@@ -2423,12 +3022,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    // AMD GPU optimization: Use smaller workgroup size for better occupancy
-    // RDNA GPUs (wavefront size 32) prefer 128 or 256 threads per block
-    // Default to 256 for good balance (8 wavefronts on RDNA)
-    unsigned clKernelLSize = 256; // Changed from 1024 - AMD RDNA optimization
-    unsigned clKernelLSizeLog2 = 8; // Changed from 10 (2^8 = 256)
-
     std::vector<HIPDeviceInfo> gpus;
     int devicesNum = 0;
     HIP_SAFE_CALL(hipInit(0));
@@ -2474,144 +3067,22 @@ int main(int argc, char** argv) {
             info.gcnArchName);
     }
 
-    // generate kernel configuration file
-    {
-        unsigned clKernelStripes = 210;
-        unsigned clKernelPCount = 65536;
-        unsigned clKernelWindowSize = 12288;
-        // Use the same optimized workgroup size for config generation
-        unsigned clKernelLSize = 256; // AMD RDNA optimization (was 1024)
-        unsigned clKernelLSizeLog2 = 8; // log2(256) = 8 (was 10)
-        unsigned clKernelTarget = 10;
-        unsigned clKernelWidth = 20;
-        unsigned multiplierSizeLimits[3] = {24, 31, 35};
-        std::ofstream config("xpm/cuda/config.cu", std::fstream::trunc);
-        config << "#define STRIPES " << clKernelStripes << '\n';
-        config << "#define WIDTH " << clKernelWidth << '\n';
-        config << "#define PCOUNT " << clKernelPCount << '\n';
-        config << "#define TARGET " << clKernelTarget << '\n';
-        config << "#define SIZE " << clKernelWindowSize << '\n';
-        config << "#define LSIZE " << clKernelLSize << '\n';
-        config << "#define LSIZELOG2 " << clKernelLSizeLog2 << '\n';
-        config << "#define LIMIT13 " << multiplierSizeLimits[0] << '\n';
-        config << "#define LIMIT14 " << multiplierSizeLimits[1] << '\n';
-        config << "#define LIMIT15 " << multiplierSizeLimits[2] << '\n';
-        dumpSieveConstants(
-            clKernelPCount,
-            clKernelLSize,
-            clKernelWindowSize * 32,
-            gPrimes + 13,
-            config);
-    }
-
-    // Build compiler arguments with all the defines from config.cu
-    unsigned clKernelStripes = 210;
-    unsigned clKernelPCount = 65536;
-    unsigned clKernelWindowSize = 12288;
-    unsigned clKernelLSizeForCompile = 256; // AMD RDNA optimization
-    unsigned clKernelLSizeLog2ForCompile = 8; // log2(256) = 8
-    unsigned clKernelTarget = 10;
-    unsigned clKernelWidth = 20;
-    unsigned multiplierSizeLimits[3] = {24, 31, 35};
-
-    // Calculate SIEVERANGE constants (same logic as dumpSieveConstants)
-    unsigned windowSize = clKernelWindowSize * 32;
-    unsigned ranges[3] = {0, 0, 0};
-    for (unsigned i = 0; i < clKernelPCount / clKernelLSizeForCompile; i++) {
-        unsigned prime = gPrimes[13 + i * clKernelLSizeForCompile];
-        if (ranges[0] == 0 && windowSize / prime <= 2)
-            ranges[0] = i;
-        if (ranges[1] == 0 && windowSize / prime <= 1)
-            ranges[1] = i;
-        if (ranges[2] == 0 && windowSize / prime == 0)
-            ranges[2] = i;
-    }
-
-    // Create separate buffers for each define (must remain in scope for
-    // hipCompileKernel)
-    static char defineStripes[64], defineWidth[64], definePCount[64],
-        defineTarget[64];
-    static char defineSize[64], defineLSize[64], defineLSizeLog2[64];
-    static char defineLimit13[64], defineLimit14[64], defineLimit15[64];
-    static char defineSieveRange1[64], defineSieveRange2[64],
-        defineSieveRange3[64];
-    static char includePathBuf1[256], includePathBuf2[256],
-        includePathBuf3[256];
-
-    sprintf(defineStripes, "-DSTRIPES=%u", clKernelStripes);
-    sprintf(defineWidth, "-DWIDTH=%u", clKernelWidth);
-    sprintf(definePCount, "-DPCOUNT=%u", clKernelPCount);
-    sprintf(defineTarget, "-DTARGET=%u", clKernelTarget);
-    sprintf(defineSize, "-DSIZE=%u", clKernelWindowSize);
-    sprintf(defineLSize, "-DLSIZE=%u", clKernelLSizeForCompile);
-    sprintf(defineLSizeLog2, "-DLSIZELOG2=%u", clKernelLSizeLog2ForCompile);
-    sprintf(defineLimit13, "-DLIMIT13=%u", multiplierSizeLimits[0]);
-    sprintf(defineLimit14, "-DLIMIT14=%u", multiplierSizeLimits[1]);
-    sprintf(defineLimit15, "-DLIMIT15=%u", multiplierSizeLimits[2]);
-    sprintf(defineSieveRange1, "-DSIEVERANGE1=%u", ranges[0]);
-    sprintf(defineSieveRange2, "-DSIEVERANGE2=%u", ranges[1]);
-    sprintf(defineSieveRange3, "-DSIEVERANGE3=%u", ranges[2]);
-    sprintf(includePathBuf1, "-Ixpm/cuda");
-    sprintf(includePathBuf2, "-I../src/Hip");
-    sprintf(includePathBuf3, "-I/opt/rocm/include");
-
-    std::vector<hipModule_t> modules;
-    modules.resize(gpus.size());
-    for (unsigned i = 0; i < gpus.size(); i++) {
-        char kernelname[64];
-        char ccoption[64];
-        sprintf(kernelname, "kernelxpm_gpu%u.hipbin", gpus[i].index);
-        // Use the actual gcnArchName reported by the device
-        sprintf(ccoption, "--offload-arch=%s", gpus[i].gcnArchName);
-
-        // Each -D flag must be a separate array element for HIPRTC
-        // AMD GPU optimization: Enable unsafe FP atomics for faster atomic
-        // operations NOTE: Temporarily disabled to test if it's causing
-        // synchronization issues
-        const char* options[] = {
-            ccoption,
-            // "-munsafe-fp-atomics",  // AMD optimization: 10-100x faster
-            // atomics - DISABLED for testing
-            // "-Rpass-analysis=kernel-resource-usage",  // DIAGNOSTIC
-            // COMPLETED: Confirmed no VGPR spilling
-            includePathBuf1, // xpm/cuda for kernel source files
-            includePathBuf2, // ../src/Hip for header files
-            includePathBuf3, // ROCm include path (required in ROCm 7.x)
-            defineStripes,
-            defineWidth,
-            definePCount,
-            defineTarget,
-            defineSize,
-            defineLSize,
-            defineLSizeLog2,
-            defineLimit13,
-            defineLimit14,
-            defineLimit15,
-            defineSieveRange1,
-            defineSieveRange2,
-            defineSieveRange3};
-
-        HIP_SAFE_CALL(hipCtxSetCurrent(gpus[i].context));
-        if (!hipCompileKernel(
-                kernelname,
-                {"xpm/cuda/fermat_hip.cpp",
-                 "xpm/cuda/procs_hip.cpp",
-                 "xpm/cuda/sieve_hip.cpp",
-                 "xpm/cuda/sha256_hip.cpp",
-                 "xpm/cuda/json_sha256_hip.cpp",
-                 "xpm/cuda/benchmarks_kernels_hip.cpp"},
-                options,
-                17, // 1 architecture + 3 include paths + 13 define flags
-                &modules[i],
-                gpus[i].majorComputeCapability,
-                gpus[i].minorComputeCapability,
-                true)) {
-            return false;
-        }
-    }
     int depth = 5 - 1;
     depth = std::max(depth, 2);
     depth = std::min(depth, 5);
+
+    std::vector<hipModule_t> modules(gpus.size(), nullptr);
+    std::vector<HipKernelConfig> selectedConfigs(gpus.size());
+    for (unsigned i = 0; i < gpus.size(); ++i) {
+        if (!selectHipConfiguration(
+                gpus[i],
+                (unsigned)gpus.size(),
+                depth,
+                &selectedConfigs[i],
+                &modules[i])) {
+            return false;
+        }
+    }
 
     if (isBenchmark) {
         for (unsigned i = 0; i < gpus.size(); i++) {
@@ -2620,7 +3091,7 @@ int main(int argc, char** argv) {
                 gpus[i].device,
                 modules[i],
                 depth,
-                clKernelLSize);
+                selectedConfigs[i].lsize);
         }
         return 0; // Exit after benchmark
     }
@@ -2628,7 +3099,12 @@ int main(int argc, char** argv) {
     unsigned int sievePerRound = 5;
     for (unsigned i = 0; i < gpus.size(); ++i) {
         PrimeMiner* miner =
-            new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
+            new PrimeMiner(
+                i,
+                gpus.size(),
+                sievePerRound,
+                depth,
+                selectedConfigs[i].lsize);
         miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
 
         if (useGetWork) {

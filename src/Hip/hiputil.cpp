@@ -1,9 +1,46 @@
 #include "hiputil.h"
 #include <string.h>
+#include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include "hip/hip_runtime.h"
+
+namespace {
+
+void hashBytes(uint64_t& hash, const void* data, size_t size) {
+    const unsigned char* bytes = static_cast<const unsigned char*>(data);
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ull;
+    }
+}
+
+std::string kernelFingerprint(
+    const std::string& source,
+    const char** arguments,
+    int argumentsNum) {
+    uint64_t hash = 1469598103934665603ull;
+    hashBytes(hash, source.data(), source.size());
+    for (int i = 0; i < argumentsNum; ++i) {
+        const char* argument = arguments[i] ? arguments[i] : "";
+        hashBytes(hash, argument, strlen(argument));
+        const char separator = '\0';
+        hashBytes(hash, &separator, sizeof(separator));
+    }
+
+    int runtimeVersion = 0;
+    if (hipRuntimeGetVersion(&runtimeVersion) == hipSuccess)
+        hashBytes(hash, &runtimeVersion, sizeof(runtimeVersion));
+
+    std::ostringstream stream;
+    stream << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return stream.str();
+}
+
+} // namespace
 
 bool hipCompileKernel(
     const char* kernelName,
@@ -13,24 +50,48 @@ bool hipCompileKernel(
     hipModule_t* module,
     int majorComputeCapability,
     int,
-    bool needRebuild) {
-    std::ifstream testfile(kernelName);
-    if (needRebuild || !testfile) {
-        LOG_F(INFO, "compiling ...");
+    bool needRebuild,
+    bool verbose) {
+    (void)majorComputeCapability;
 
-        std::string sourceFile;
-        for (auto& i : sources) {
-            std::ifstream stream(i);
-            std::string str(
-                (std::istreambuf_iterator<char>(stream)),
-                std::istreambuf_iterator<char>());
-            sourceFile.append(str);
-        }
-
-        LOG_F(INFO, "source: %u bytes", (unsigned)sourceFile.size());
-        if (sourceFile.size() < 1) {
-            LOG_F(ERROR, "source files not found or empty");
+    std::string sourceFile;
+    for (const char* sourcePath : sources) {
+        std::ifstream stream(sourcePath, std::ifstream::binary);
+        if (!stream) {
+            LOG_F(ERROR, "HIP kernel source not found: %s", sourcePath);
             return false;
+        }
+        std::string source(
+            (std::istreambuf_iterator<char>(stream)),
+            std::istreambuf_iterator<char>());
+        if (source.empty()) {
+            LOG_F(ERROR, "HIP kernel source is empty: %s", sourcePath);
+            return false;
+        }
+        sourceFile.append(source);
+        sourceFile.push_back('\n');
+    }
+
+    const std::string fingerprint =
+        kernelFingerprint(sourceFile, arguments, argumentsNum);
+    const std::string fingerprintPath =
+        std::string(kernelName) + ".fingerprint";
+    bool cacheMatches = false;
+    if (!needRebuild) {
+        std::ifstream binaryFile(kernelName, std::ifstream::binary);
+        std::ifstream fingerprintFile(fingerprintPath);
+        std::string cachedFingerprint;
+        if (binaryFile && fingerprintFile &&
+            (fingerprintFile >> cachedFingerprint) &&
+            cachedFingerprint == fingerprint) {
+            cacheMatches = true;
+        }
+    }
+
+    if (!cacheMatches) {
+        if (verbose) {
+            LOG_F(INFO, "Compiling HIP kernel %s...", kernelName);
+            LOG_F(INFO, "source: %u bytes", (unsigned)sourceFile.size());
         }
 
         hiprtcProgram prog;
@@ -43,12 +104,13 @@ bool hipCompileKernel(
         // Obtain compilation log from the program.
         size_t logSize;
         HIPRTC_SAFE_CALL(hiprtcGetProgramLogSize(prog, &logSize));
-        char* log = new char[logSize];
-        HIPRTC_SAFE_CALL(hiprtcGetProgramLog(prog, log));
+        std::unique_ptr<char[]> log(new char[std::max<size_t>(logSize, 1)]);
+        log[0] = '\0';
+        if (logSize)
+            HIPRTC_SAFE_CALL(hiprtcGetProgramLog(prog, log.get()));
 
-        // Always print log to help with debugging
-        if (logSize > 1) {
-            LOG_F(INFO, "HIPRTC Compilation log:\n%s", log);
+        if (verbose && logSize > 1) {
+            LOG_F(INFO, "HIPRTC Compilation log:\n%s", log.get());
         }
 
         if (compileResult != HIPRTC_SUCCESS) {
@@ -57,12 +119,11 @@ bool hipCompileKernel(
                 "hiprtcCompileProgram error: %s",
                 hiprtcGetErrorString(compileResult));
             if (logSize > 1) {
-                LOG_F(ERROR, "Compilation errors:\n%s", log);
+                LOG_F(ERROR, "Compilation errors:\n%s", log.get());
             }
-            delete[] log;
+            hiprtcDestroyProgram(&prog);
             return false;
         }
-        delete[] log;
 
         // Obtain PTX from the program.
         size_t ptxSize;
@@ -77,10 +138,26 @@ bool hipCompileKernel(
             std::ofstream bin(
                 kernelName, std::ofstream::binary | std::ofstream::trunc);
             bin.write(ptx, ptxSize);
-            bin.close();
+            if (!bin) {
+                LOG_F(ERROR, "Failed writing HIP kernel cache: %s", kernelName);
+                delete[] ptx;
+                return false;
+            }
         }
 
         delete[] ptx;
+
+        std::ofstream fingerprintFile(
+            fingerprintPath, std::ofstream::trunc);
+        fingerprintFile << fingerprint << '\n';
+        if (!fingerprintFile) {
+            LOG_F(
+                WARNING,
+                "Failed writing HIP kernel fingerprint: %s",
+                fingerprintPath.c_str());
+        }
+    } else if (verbose) {
+        LOG_F(INFO, "Using cached HIP kernel %s", kernelName);
     }
 
     std::ifstream bfile(kernelName, std::ifstream::binary);
@@ -100,7 +177,8 @@ bool hipCompileKernel(
     bfile.read(code.get(), binsize);
     bfile.close();
 
-    LOG_F(INFO, "Loading HIP module from %s (%zu bytes)", kernelName, binsize);
+    if (verbose)
+        LOG_F(INFO, "Loading HIP module from %s (%zu bytes)", kernelName, binsize);
 
     hipError_t result = hipModuleLoadData(module, code.get());
     if (result != hipSuccess) {
@@ -129,6 +207,7 @@ bool hipCompileKernel(
         return false;
     }
 
-    LOG_F(INFO, "HIP module loaded successfully");
+    if (verbose)
+        LOG_F(INFO, "HIP module loaded successfully");
     return true;
 }

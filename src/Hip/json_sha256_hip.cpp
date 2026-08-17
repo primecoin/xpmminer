@@ -60,7 +60,7 @@ __device__ int uint64_to_str(uint64_t value, char* buf) {
 
 // Process one SHA256 block
 __device__ void sha256_transform(uint32_t* state, const uint8_t* block) {
-  uint32_t w[64];
+  uint32_t w[16];
   uint32_t a, b, c, d, e, f, g, h, t1, t2;
 
   // Prepare message schedule
@@ -71,17 +71,18 @@ __device__ void sha256_transform(uint32_t* state, const uint8_t* block) {
            ((uint32_t)block[i*4+3]);
   }
 
-  for (int i = 16; i < 64; i++) {
-    w[i] = SIG1(w[i-2]) + w[i-7] + SIG0(w[i-15]) + w[i-16];
-  }
-
   // Initialize working variables
   a = state[0]; b = state[1]; c = state[2]; d = state[3];
   e = state[4]; f = state[5]; g = state[6]; h = state[7];
 
   // Main loop
   for (int i = 0; i < 64; i++) {
-    t1 = h + EP1(e) + CH(e, f, g) + k[i] + w[i];
+    const int wi = i & 15;
+    if (i >= 16) {
+      w[wi] = SIG1(w[(i - 2) & 15]) + w[(i - 7) & 15] +
+              SIG0(w[(i - 15) & 15]) + w[wi];
+    }
+    t1 = h + EP1(e) + CH(e, f, g) + k[i] + w[wi];
     t2 = EP0(a) + MAJ(a, b, c);
     h = g; g = f; f = e; e = d + t1;
     d = c; c = b; b = a; a = t1 + t2;

@@ -221,7 +221,12 @@ public:
 
     // Allow benchmark functions to access private members
     friend void runMetalBenchmarks(id<MTLDevice> device, PrimeMiner* miner);
-    friend bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune);
+    friend bool metalSieveEvaluate(PrimeMiner* miner,
+                                   bool autoTune,
+                                   double* selectedScore,
+                                   uint64_t* selectedDigest,
+                                   uint32_t* selectedCount320,
+                                   uint32_t* selectedCount352);
     friend void metalSievePerfBenchmark(PrimeMiner* miner);
     friend void metalSieveCheckBenchmark(PrimeMiner* miner);
     friend void metalHashmodBenchmark(PrimeMiner* miner);
@@ -232,7 +237,12 @@ private:
                                      SubmitContext* submit,
                                      unsigned benchmarkSeconds,
                                      bool reportBenchmarkResults = true);
+    bool EnsureSievePipelines(unsigned lsize, unsigned nlifo);
+    bool SelectSieveConfiguration(unsigned lsize, unsigned nlifo);
     bool SelectSieveLSize(unsigned lsize);
+    id<MTLComputePipelineState> SievePipelineFor(unsigned lsize,
+                                                 unsigned nlifo,
+                                                 bool dynamicMemory);
     void FermatInit(pipeline_t& fermat, unsigned mfs);
     void FermatDispatch(pipeline_t& fermat,
                         MetalBuffer<fermat_t> sieveBuffers[SW][FERMAT_PIPELINES][2],
@@ -253,11 +263,13 @@ private:
     unsigned mBlockSize;
     uint32_t mDepth;
     unsigned mLSize;
+    unsigned mNLifo;
 
     // Metal objects
     id<MTLDevice> _device;
     id<MTLCommandQueue> _commandQueue;
     id<MTLLibrary> _library;
+    id<MTLLibrary> _sieveLibrary;
 
     // Compute pipeline states
     id<MTLComputePipelineState> _testKernelPipeline;    // Minimal test kernel
@@ -273,6 +285,8 @@ private:
     id<MTLComputePipelineState> _sieveDynamicPipeline512;
     id<MTLComputePipelineState> _sievePipeline1024;
     id<MTLComputePipelineState> _sieveDynamicPipeline1024;
+    id<MTLComputePipelineState> _sievePipelines[3][7];
+    id<MTLComputePipelineState> _sieveDynamicPipelines[3][7];
     id<MTLComputePipelineState> _sieveSearchPipeline;
     id<MTLComputePipelineState> _fermatSetupPipeline;
     id<MTLComputePipelineState> _fermatKernel352Pipeline;

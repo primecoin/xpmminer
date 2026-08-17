@@ -39,6 +39,29 @@ static bool gMetalAutoTune = true;
 static bool gMetalMiningAutoTune = false;
 static bool gMetalConfigExplicit = false;
 
+static constexpr uint32_t kMetalSieveLSizes[] = {256, 512, 1024};
+static constexpr uint32_t kMetalSieveNLifos[] = {1, 2, 4, 6, 8, 12, 16};
+
+static int metalSieveLSizeIndex(uint32_t lsize) {
+    for (size_t i = 0;
+         i < sizeof(kMetalSieveLSizes) / sizeof(kMetalSieveLSizes[0]);
+         ++i) {
+        if (kMetalSieveLSizes[i] == lsize)
+            return (int)i;
+    }
+    return -1;
+}
+
+static int metalSieveNLifoIndex(uint32_t nlifo) {
+    for (size_t i = 0;
+         i < sizeof(kMetalSieveNLifos) / sizeof(kMetalSieveNLifos[0]);
+         ++i) {
+        if (kMetalSieveNLifos[i] == nlifo)
+            return (int)i;
+    }
+    return -1;
+}
+
 static uint32_t metalSieveTileCount(uint32_t logicalWords) {
     return logicalWords > 8192 ? 2 : 1;
 }
@@ -124,7 +147,8 @@ PrimeMiner::PrimeMiner(unsigned id, unsigned threads, unsigned sievePerRound,
     mThreads = threads;
     mSievePerRound = sievePerRound;
     mDepth = depth;
-mLSize = LSize;
+    mLSize = LSize;
+    mNLifo = 4;
     MakeExit = false;
 
     // WORKAROUND: Initialize duplicate submission tracking (see header comments)
@@ -136,6 +160,7 @@ mLSize = LSize;
     _device = nil;
     _commandQueue = nil;
     _library = nil;
+    _sieveLibrary = nil;
 
     _jsonHashModPipeline = nil;
     _blockHashModPipeline = nil;
@@ -149,6 +174,12 @@ mLSize = LSize;
     _sieveDynamicPipeline512 = nil;
     _sievePipeline1024 = nil;
     _sieveDynamicPipeline1024 = nil;
+    for (size_t lsizeIndex = 0; lsizeIndex < 3; ++lsizeIndex) {
+        for (size_t nlifoIndex = 0; nlifoIndex < 7; ++nlifoIndex) {
+            _sievePipelines[lsizeIndex][nlifoIndex] = nil;
+            _sieveDynamicPipelines[lsizeIndex][nlifoIndex] = nil;
+        }
+    }
     _sieveSearchPipeline = nil;
     _fermatSetupPipeline = nil;
     _fermatKernel352Pipeline = nil;
@@ -165,28 +196,110 @@ PrimeMiner::~PrimeMiner() {
     // ARC will handle Metal object cleanup
 }
 
-bool PrimeMiner::SelectSieveLSize(unsigned lsize) {
-    switch (lsize) {
-        case 256:
-            _sievePipeline = _sievePipeline256;
-            _sieveDynamicPipeline = _sieveDynamicPipeline256;
-            break;
-        case 512:
-            _sievePipeline = _sievePipeline512;
-            _sieveDynamicPipeline = _sieveDynamicPipeline512;
-            break;
-        case 1024:
-            _sievePipeline = _sievePipeline1024;
-            _sieveDynamicPipeline = _sieveDynamicPipeline1024;
-            break;
-        default:
-            return false;
+bool PrimeMiner::EnsureSievePipelines(unsigned lsize, unsigned nlifo) {
+    const int lsizeIndex = metalSieveLSizeIndex(lsize);
+    const int nlifoIndex = metalSieveNLifoIndex(nlifo);
+    if (lsizeIndex < 0 || nlifoIndex < 0 || !_sieveLibrary)
+        return false;
+    if (_sievePipelines[lsizeIndex][nlifoIndex] &&
+        _sieveDynamicPipelines[lsizeIndex][nlifoIndex]) {
+        return true;
     }
 
-    if (!_sievePipeline || !_sieveDynamicPipeline)
+    auto createPipeline = [&](NSString* name) -> id<MTLComputePipelineState> {
+        MTLFunctionConstantValues* values = [MTLFunctionConstantValues new];
+        uint32_t lsizeLog2 = 0;
+        for (uint32_t value = lsize; value > 1; value >>= 1)
+            ++lsizeLog2;
+        [values setConstantValue:&lsizeLog2
+                            type:MTLDataTypeUInt
+                         atIndex:0];
+        [values setConstantValue:&nlifo
+                            type:MTLDataTypeUInt
+                         atIndex:1];
+
+        NSError* functionError = nil;
+        id<MTLFunction> function =
+            [_sieveLibrary newFunctionWithName:name
+                                constantValues:values
+                                         error:&functionError];
+        if (!function) {
+            LOG_F(ERROR,
+                  "Failed to specialize sieve function %s for LSIZE=%u "
+                  "NLIFO=%u: %s",
+                  [name UTF8String], lsize, nlifo,
+                  [[functionError localizedDescription] UTF8String]);
+            return nil;
+        }
+
+        MTLComputePipelineDescriptor* descriptor =
+            [MTLComputePipelineDescriptor new];
+        descriptor.computeFunction = function;
+        descriptor.maxTotalThreadsPerThreadgroup = lsize;
+        descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth = YES;
+        NSError* pipelineError = nil;
+        id<MTLComputePipelineState> pipeline =
+            [_device newComputePipelineStateWithDescriptor:descriptor
+                                                   options:MTLPipelineOptionNone
+                                                reflection:nil
+                                                     error:&pipelineError];
+        if (!pipeline) {
+            LOG_F(ERROR,
+                  "Failed to create specialized sieve pipeline %s for "
+                  "LSIZE=%u NLIFO=%u: %s",
+                  [name UTF8String], lsize, nlifo,
+                  [[pipelineError localizedDescription] UTF8String]);
+        }
+        return pipeline;
+    };
+
+    _sievePipelines[lsizeIndex][nlifoIndex] = createPipeline(@"sieve");
+    _sieveDynamicPipelines[lsizeIndex][nlifoIndex] =
+        createPipeline(@"sieve_dynamic");
+    return _sievePipelines[lsizeIndex][nlifoIndex] &&
+        _sieveDynamicPipelines[lsizeIndex][nlifoIndex];
+}
+
+id<MTLComputePipelineState> PrimeMiner::SievePipelineFor(
+    unsigned lsize,
+    unsigned nlifo,
+    bool dynamicMemory) {
+    if (!EnsureSievePipelines(lsize, nlifo))
+        return nil;
+    const int lsizeIndex = metalSieveLSizeIndex(lsize);
+    const int nlifoIndex = metalSieveNLifoIndex(nlifo);
+    return dynamicMemory ?
+        _sieveDynamicPipelines[lsizeIndex][nlifoIndex] :
+        _sievePipelines[lsizeIndex][nlifoIndex];
+}
+
+bool PrimeMiner::SelectSieveConfiguration(unsigned lsize, unsigned nlifo) {
+    if (mConfig.PCOUNT != 0 &&
+        (mConfig.PCOUNT % lsize != 0 ||
+         mConfig.PCOUNT / lsize <= nlifo)) {
+        if (gDebug) {
+            LOG_F(WARNING,
+                  "Rejecting Metal sieve LSIZE=%u NLIFO=%u for PCOUNT=%u; "
+                  "the prefetch window needs at least one additional prime "
+                  "group",
+                  lsize, nlifo, mConfig.PCOUNT);
+        }
         return false;
+    }
+    if (!EnsureSievePipelines(lsize, nlifo))
+        return false;
+    const int lsizeIndex = metalSieveLSizeIndex(lsize);
+    const int nlifoIndex = metalSieveNLifoIndex(nlifo);
+    _sievePipeline = _sievePipelines[lsizeIndex][nlifoIndex];
+    _sieveDynamicPipeline =
+        _sieveDynamicPipelines[lsizeIndex][nlifoIndex];
     mLSize = lsize;
+    mNLifo = nlifo;
     return true;
+}
+
+bool PrimeMiner::SelectSieveLSize(unsigned lsize) {
+    return SelectSieveConfiguration(lsize, mNLifo);
 }
 
 void PrimeMiner::FermatInit(pipeline_t& fermat, unsigned mfs) {
@@ -655,7 +768,8 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         // autotuning compares it with 1024 when the device supports both.
         mLSize = 512;
         if (gDebug)
-            LOG_F(INFO, "Initial Metal sieve LSIZE=%u", mLSize);
+            LOG_F(INFO, "Initial Metal sieve LSIZE=%u NLIFO=%u", mLSize,
+                  mNLifo);
 
         // Create command queue
         _commandQueue = [device newCommandQueue];
@@ -764,50 +878,7 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         auto createPipeline = [&] (NSString* name) -> id<MTLComputePipelineState> {
             return createPipelineFromLibrary(_library, name);
         };
-        auto createSievePipeline = [&] (
-            NSString* name, uint32_t lsize) -> id<MTLComputePipelineState> {
-            MTLFunctionConstantValues* values = [MTLFunctionConstantValues new];
-            uint32_t lsizeLog2 = 0;
-            for (uint32_t value = lsize; value > 1; value >>= 1)
-                ++lsizeLog2;
-            [values setConstantValue:&lsizeLog2
-                                type:MTLDataTypeUInt
-                             atIndex:0];
-            NSError* functionError = nil;
-            id<MTLFunction> function =
-                [jsonHashLibrary newFunctionWithName:name
-                                      constantValues:values
-                                               error:&functionError];
-            if (!function) {
-                LOG_F(ERROR, "Failed to specialize sieve function %s for LSIZE=%u: %s",
-                      [name UTF8String], lsize,
-                      [[functionError localizedDescription] UTF8String]);
-                return nil;
-            }
-
-            // Compile each dispatch size with a matching occupancy target.
-            // Apple documents this descriptor value as a compiler tuning hint;
-            // leaving it at zero can optimize every variant for the device's
-            // maximum even though a smaller threadgroup is always dispatched.
-            MTLComputePipelineDescriptor* descriptor =
-                [MTLComputePipelineDescriptor new];
-            descriptor.computeFunction = function;
-            descriptor.maxTotalThreadsPerThreadgroup = lsize;
-            descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth = YES;
-            NSError* pipelineError = nil;
-            id<MTLComputePipelineState> pipeline =
-                [device newComputePipelineStateWithDescriptor:descriptor
-                                                      options:MTLPipelineOptionNone
-                                                   reflection:nil
-                                                        error:&pipelineError];
-            if (!pipeline) {
-                LOG_F(ERROR,
-                      "Failed to create specialized sieve pipeline %s for LSIZE=%u: %s",
-                      [name UTF8String], lsize,
-                      [[pipelineError localizedDescription] UTF8String]);
-            }
-            return pipeline;
-        };
+        _sieveLibrary = jsonHashLibrary;
 
         _jsonHashModPipeline =
             createPipelineFromLibrary(jsonHashLibrary, @"jsonHashMod");
@@ -817,14 +888,22 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
             createPipelineFromLibrary(jsonHashLibrary, @"blockHashDebug");
         _sieveSetupPipeline =
             createPipelineFromLibrary(jsonHashLibrary, @"setup_sieve");
-        _sievePipeline256 = createSievePipeline(@"sieve", 256);
-        _sieveDynamicPipeline256 = createSievePipeline(@"sieve_dynamic", 256);
-        _sievePipeline512 = createSievePipeline(@"sieve", 512);
-        _sieveDynamicPipeline512 = createSievePipeline(@"sieve_dynamic", 512);
+        if (!EnsureSievePipelines(256, 4) ||
+            !EnsureSievePipelines(512, 4)) {
+            LOG_F(ERROR, "Failed to create the required NLIFO=4 sieve pipelines");
+            return false;
+        }
+        _sievePipeline256 = SievePipelineFor(256, 4, false);
+        _sieveDynamicPipeline256 = SievePipelineFor(256, 4, true);
+        _sievePipeline512 = SievePipelineFor(512, 4, false);
+        _sieveDynamicPipeline512 = SievePipelineFor(512, 4, true);
         if (supportsLSize1024) {
-            _sievePipeline1024 = createSievePipeline(@"sieve", 1024);
-            _sieveDynamicPipeline1024 =
-                createSievePipeline(@"sieve_dynamic", 1024);
+            if (!EnsureSievePipelines(1024, 4)) {
+                LOG_F(ERROR, "Failed to create the LSIZE=1024 NLIFO=4 sieve pipelines");
+                return false;
+            }
+            _sievePipeline1024 = SievePipelineFor(1024, 4, false);
+            _sieveDynamicPipeline1024 = SievePipelineFor(1024, 4, true);
         }
         if (!SelectSieveLSize(512)) {
             LOG_F(ERROR, "Failed to select the safe LSIZE=512 sieve pipelines");
@@ -880,6 +959,13 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
 
         // PCOUNT is configurable via --prime-count parameter
         mConfig.PCOUNT = gPrimeCount;
+        if (!SelectSieveConfiguration(mLSize, mNLifo)) {
+            LOG_F(ERROR,
+                  "Initial Metal sieve LSIZE=%u NLIFO=%u is incompatible "
+                  "with PCOUNT=%u",
+                  mLSize, mNLifo, mConfig.PCOUNT);
+            return false;
+        }
         const NSUInteger requiredThreadgroupMemory =
             (NSUInteger)metalSieveTileWords(mConfig.SIZE) * sizeof(uint32_t);
         if (requiredThreadgroupMemory > device.maxThreadgroupMemoryLength) {
@@ -893,9 +979,9 @@ bool PrimeMiner::Initialize(id<MTLDevice> device) {
         if (gDebug) {
             LOG_F(INFO,
                   "Initial configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
-                  "LSIZE=%u, %u prime checks per thread",
+                  "LSIZE=%u, NLIFO=%u, %u prime checks per thread",
                   mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT, mLSize,
-                  checksPerThread);
+                  mNLifo, checksPerThread);
         }
 
         mConfig.TARGET = 10;
@@ -2059,8 +2145,22 @@ void metalSieveCheckBenchmark(PrimeMiner* miner) {
 }
 
 // Shared sieve evaluator used by both the full benchmark and startup autotuning.
-bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
+bool metalSieveEvaluate(PrimeMiner* miner,
+                        bool autoTune,
+                        double* selectedScore,
+                        uint64_t* selectedDigest,
+                        uint32_t* selectedCount320,
+                        uint32_t* selectedCount352) {
     @autoreleasepool {
+        const bool selectedConfigurationOnly = selectedScore != nullptr;
+        if (selectedScore)
+            *selectedScore = 0.0;
+        if (selectedDigest)
+            *selectedDigest = 0;
+        if (selectedCount320)
+            *selectedCount320 = 0;
+        if (selectedCount352)
+            *selectedCount352 = 0;
         struct PrimePair { uint32_t prime; uint32_t reciprocal; };
         struct SieveScenario {
             uint32_t size;
@@ -2098,7 +2198,8 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
             {12288, 65536, 210, true}
         };
         std::vector<SieveScenario> scenarios;
-        if (autoTune && gMetalConfigExplicit) {
+        if (selectedConfigurationOnly ||
+            (autoTune && gMetalConfigExplicit)) {
             scenarios.push_back({
                 miner->mConfig.SIZE,
                 miner->mConfig.PCOUNT,
@@ -2204,26 +2305,35 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
         uint64_t staticBaselineDigest = 0;
         uint32_t staticBaselineCount320 = 0;
         uint32_t staticBaselineCount352 = 0;
+        bool measuredSelectedConfiguration = false;
         bool foundUsableScenario = false;
         double bestScore = 0.0;
         SieveScenario bestScenario = {4096, 16384, 210, false};
         uint32_t bestLSize = miner->mLSize;
         std::vector<TunedCandidate> rankedCandidates;
         for (const uint32_t lsize : lsizeOptions) {
+            const uint32_t evaluationNLifo = autoTune ? 4 : miner->mNLifo;
             id<MTLComputePipelineState> staticSievePipeline =
-                lsize == 256 ? miner->_sievePipeline256 :
-                (lsize == 512 ? miner->_sievePipeline512 :
-                                miner->_sievePipeline1024);
+                miner->SievePipelineFor(lsize, evaluationNLifo, false);
             id<MTLComputePipelineState> dynamicSievePipeline =
-                lsize == 256 ? miner->_sieveDynamicPipeline256 :
-                (lsize == 512 ? miner->_sieveDynamicPipeline512 :
-                                miner->_sieveDynamicPipeline1024);
+                miner->SievePipelineFor(lsize, evaluationNLifo, true);
             if (!staticSievePipeline || !dynamicSievePipeline)
                 continue;
 
             for (const SieveScenario& scenario : scenarios) {
                 if (autoTune && !isStartupCandidate(scenario))
                     continue;
+                if (scenario.primeCount % lsize != 0 ||
+                    scenario.primeCount / lsize <= evaluationNLifo) {
+                    if (!autoTune && !selectedConfigurationOnly) {
+                        LOG_F(INFO,
+                              "Sieve benchmark: skipping LSIZE=%u PCOUNT=%u "
+                              "NLIFO=%u; prefetch window is larger than the "
+                              "available prime groups",
+                              lsize, scenario.primeCount, evaluationNLifo);
+                    }
+                    continue;
+                }
                 if (scenario.dynamicMemory &&
                     (NSUInteger)metalSieveTileWords(scenario.size) * sizeof(uint32_t) >
                         miner->_device.maxThreadgroupMemoryLength) {
@@ -2444,6 +2554,16 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
                 double primeGroups = (double)scenario.primeCount * groups;
                 double millionPrimeGroupsPerSecond = primeGroups / (medianMs * 1000.0);
                 double rangeMillions = (double)scenario.size * 32.0 * stripes / 1000000.0;
+                if (selectedConfigurationOnly) {
+                    measuredSelectedConfiguration = true;
+                    *selectedScore = rangeMillions / medianMs;
+                    if (selectedDigest)
+                        *selectedDigest = firstDigest;
+                    if (selectedCount320)
+                        *selectedCount320 = firstCount320;
+                    if (selectedCount352)
+                        *selectedCount352 = firstCount352;
+                }
                 if (!autoTune || gDebug) {
                     LOG_F(INFO, "Sieve[%s] LSIZE=%u SIZE=%u STRIPES=%u PCOUNT=%u range=%.1fM: PASS, %.3f ms, %.1f Mprime-groups/s, candidates=%u+%u, digest=%016llx",
                           scenario.dynamicMemory ? "dynamic" : "static",
@@ -2485,6 +2605,11 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
 
         if (autoTune)
             renderAutoTuneProgress(autoTuneConfigurationCount);
+
+        if (selectedConfigurationOnly &&
+            !measuredSelectedConfiguration) {
+            return false;
+        }
 
         if (autoTune) {
             if (!foundUsableScenario) {
@@ -2578,7 +2703,10 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
             miner->mConfig.SIZE = bestScenario.size;
             miner->mConfig.STRIPES = bestScenario.stripes;
             miner->mConfig.PCOUNT = bestScenario.primeCount;
-            if (!miner->SelectSieveLSize(bestLSize)) {
+            // Geometry is screened with the historical NLIFO=4 baseline. Once
+            // the geometry is fixed, tune the register prefetch window without
+            // multiplying the entire SIZE/STRIPES/PCOUNT/LSIZE search matrix.
+            if (!miner->SelectSieveConfiguration(bestLSize, 4)) {
                 LOG_F(ERROR, "Sieve autotune selected an unavailable LSIZE=%u",
                       bestLSize);
                 return false;
@@ -2595,6 +2723,190 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
                       bestLSize, bestScenario.size, bestScenario.stripes,
                       bestScenario.primeCount, bestScore);
             }
+
+            struct NLifoCandidate {
+                uint32_t nlifo;
+                double sieveScore;
+                uint64_t digest;
+                uint32_t count320;
+                uint32_t count352;
+                MiningBenchmarkResult result;
+            };
+            constexpr size_t finalistLimit = 3;
+            const size_t nlifoCount =
+                sizeof(kMetalSieveNLifos) / sizeof(kMetalSieveNLifos[0]);
+            const size_t progressTotal = nlifoCount + finalistLimit;
+            LOG_F(INFO,
+                  "Starting Metal NLIFO autotune (%zu screening depths; "
+                  "this may take a while)...",
+                  nlifoCount);
+
+            const bool showNLifoProgress =
+                !gDebug && isatty(fileno(stderr));
+            auto renderNLifoProgress = [&](size_t completed) {
+                if (!showNLifoProgress)
+                    return;
+                constexpr size_t barWidth = 28;
+                const size_t filled =
+                    std::min(barWidth, completed * barWidth / progressTotal);
+                const size_t percent =
+                    std::min<size_t>(100, completed * 100 / progressTotal);
+                fprintf(stderr, "\rMetal NLIFO autotune [");
+                for (size_t i = 0; i < barWidth; ++i)
+                    fputc(i < filled ? '#' : '-', stderr);
+                fprintf(stderr, "] %3zu%% (%zu/%zu)", percent,
+                        std::min(completed, progressTotal), progressTotal);
+                if (completed >= progressTotal)
+                    fputc('\n', stderr);
+                fflush(stderr);
+            };
+
+            const auto oldStderrVerbosity = loguru::g_stderr_verbosity;
+            if (!gDebug)
+                loguru::g_stderr_verbosity = loguru::Verbosity_ERROR;
+
+            size_t nlifoProgress = 0;
+            std::vector<NLifoCandidate> nlifoCandidates;
+            nlifoCandidates.reserve(nlifoCount);
+            renderNLifoProgress(0);
+            for (uint32_t nlifo : kMetalSieveNLifos) {
+                NLifoCandidate candidate{nlifo, 0.0, 0, 0, 0, {}};
+                if (miner->SelectSieveConfiguration(bestLSize, nlifo)) {
+                    if (metalSieveEvaluate(
+                            miner, false, &candidate.sieveScore,
+                            &candidate.digest, &candidate.count320,
+                            &candidate.count352)) {
+                        nlifoCandidates.push_back(candidate);
+                    }
+                    if (gDebug) {
+                        LOG_F(INFO,
+                              "Metal NLIFO screen %zu/%zu: NLIFO=%u => "
+                              "%.3f sieve G/s, candidates=%u+%u, "
+                              "digest=%016llx",
+                              nlifoProgress + 1, nlifoCount, nlifo,
+                              candidate.sieveScore, candidate.count320,
+                              candidate.count352,
+                              (unsigned long long)candidate.digest);
+                    }
+                }
+                renderNLifoProgress(++nlifoProgress);
+            }
+
+            auto baseline = std::find_if(
+                nlifoCandidates.begin(), nlifoCandidates.end(),
+                [](const NLifoCandidate& candidate) {
+                    return candidate.nlifo == 4;
+                });
+            if (baseline != nlifoCandidates.end()) {
+                const uint64_t baselineDigest = baseline->digest;
+                const uint32_t baselineCount320 = baseline->count320;
+                const uint32_t baselineCount352 = baseline->count352;
+                nlifoCandidates.erase(
+                    std::remove_if(
+                        nlifoCandidates.begin(), nlifoCandidates.end(),
+                        [&](const NLifoCandidate& candidate) {
+                            const bool mismatch =
+                                candidate.digest != baselineDigest ||
+                                candidate.count320 != baselineCount320 ||
+                                candidate.count352 != baselineCount352;
+                            if (mismatch) {
+                                LOG_F(ERROR,
+                                      "Metal NLIFO=%u produced different "
+                                      "sieve output from NLIFO=4; rejecting "
+                                      "the variant",
+                                      candidate.nlifo);
+                            }
+                            return mismatch;
+                        }),
+                    nlifoCandidates.end());
+            } else {
+                nlifoCandidates.clear();
+            }
+
+            std::sort(nlifoCandidates.begin(), nlifoCandidates.end(),
+                      [](const NLifoCandidate& lhs,
+                         const NLifoCandidate& rhs) {
+                          return lhs.sieveScore > rhs.sieveScore;
+                      });
+            if (nlifoCandidates.size() > finalistLimit)
+                nlifoCandidates.resize(finalistLimit);
+
+            bool selectedNLifo = false;
+            uint32_t bestNLifo = 4;
+            double bestNLifoScore = 0.0;
+            for (size_t i = 0; i < nlifoCandidates.size(); ++i) {
+                NLifoCandidate& candidate = nlifoCandidates[i];
+                if (miner->SelectSieveConfiguration(
+                        bestLSize, candidate.nlifo)) {
+                    double finalScore = 0.0;
+                    if (gMetalMiningAutoTune) {
+                        miner->MakeExit = false;
+                        candidate.result =
+                            miner->BenchmarkMining(1, false);
+                        if (candidate.result.completed)
+                            finalScore =
+                                candidate.result.effectiveScanGps;
+                    } else {
+                        uint64_t digest = 0;
+                        uint32_t count320 = 0;
+                        uint32_t count352 = 0;
+                        if (!metalSieveEvaluate(
+                                miner, false, &finalScore, &digest,
+                                &count320, &count352) ||
+                            digest != candidate.digest ||
+                            count320 != candidate.count320 ||
+                            count352 != candidate.count352) {
+                            finalScore = 0.0;
+                        }
+                    }
+                    if (finalScore > 0.0 &&
+                        (!selectedNLifo || finalScore > bestNLifoScore)) {
+                        selectedNLifo = true;
+                        bestNLifo = candidate.nlifo;
+                        bestNLifoScore = finalScore;
+                    }
+                    if (gDebug) {
+                        if (gMetalMiningAutoTune) {
+                            LOG_F(INFO,
+                                  "Metal NLIFO finalist %zu/%zu: NLIFO=%u "
+                                  "=> %.3f end-to-end G/s, %.1f sieve "
+                                  "candidates/s",
+                                  i + 1, nlifoCandidates.size(),
+                                  candidate.nlifo, finalScore,
+                                  candidate.result.sieveCandidatesPerSecond);
+                        } else {
+                            LOG_F(INFO,
+                                  "Metal NLIFO finalist %zu/%zu: NLIFO=%u "
+                                  "=> %.3f sieve G/s",
+                                  i + 1, nlifoCandidates.size(),
+                                  candidate.nlifo, finalScore);
+                        }
+                    }
+                }
+                renderNLifoProgress(++nlifoProgress);
+            }
+            renderNLifoProgress(progressTotal);
+            loguru::g_stderr_verbosity = oldStderrVerbosity;
+
+            if (!selectedNLifo ||
+                !miner->SelectSieveConfiguration(bestLSize, bestNLifo)) {
+                if (!miner->SelectSieveConfiguration(bestLSize, 4)) {
+                    LOG_F(ERROR,
+                          "Metal NLIFO autotune could not restore the safe "
+                          "NLIFO=4 pipeline");
+                    return false;
+                }
+                LOG_F(WARNING,
+                      "Metal NLIFO autotune produced no complete result; "
+                      "using NLIFO=4");
+            } else {
+                LOG_F(INFO,
+                      "Metal NLIFO autotune selected NLIFO=%u at LSIZE=%u "
+                      "(%s %.3f G/s)",
+                      bestNLifo, bestLSize,
+                      gMetalMiningAutoTune ? "end-to-end" : "sieve",
+                      bestNLifoScore);
+            }
         }
         return true;
     }
@@ -2602,7 +2914,8 @@ bool metalSieveEvaluate(PrimeMiner* miner, bool autoTune) {
 
 // Sieve performance benchmark (measures throughput)
 void metalSievePerfBenchmark(PrimeMiner* miner) {
-    if (!metalSieveEvaluate(miner, false))
+    if (!metalSieveEvaluate(
+            miner, false, nullptr, nullptr, nullptr, nullptr))
         gBenchmarkFailed = true;
 }
 
@@ -2612,8 +2925,11 @@ void runMetalBenchmarks(id<MTLDevice> device, PrimeMiner* miner) {
         config_t cfg = miner->getConfig();
 
         LOG_F(INFO, "Benchmarking %s", [device.name UTF8String]);
-        LOG_F(INFO, "Configuration: SIZE=%u, STRIPES=%u, WIDTH=%u, PCOUNT=%u, LSIZE=%u",
-              cfg.SIZE, cfg.STRIPES, cfg.WIDTH, cfg.PCOUNT, miner->mLSize);
+        LOG_F(INFO,
+              "Configuration: SIZE=%u, STRIPES=%u, WIDTH=%u, PCOUNT=%u, "
+              "LSIZE=%u, NLIFO=%u",
+              cfg.SIZE, cfg.STRIPES, cfg.WIDTH, cfg.PCOUNT, miner->mLSize,
+              miner->mNLifo);
 
         // Get command queue and pipelines from miner
         id<MTLCommandQueue> commandQueue = miner->_commandQueue;
@@ -4004,10 +4320,11 @@ MiningBenchmarkResult PrimeMiner::MiningLoop(GetWorkContext* ctx,
                         LOG_F(INFO, "=== End-to-end blocktree.get_work benchmark (Metal) ===");
                         LOG_F(INFO,
                               "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
-                              "LSIZE=%u, sieves/round=%u, Fermat batch=%u, "
-                              "hash coefficient=%u",
+                              "LSIZE=%u, NLIFO=%u, sieves/round=%u, Fermat "
+                              "batch=%u, hash coefficient=%u",
                               mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT,
-                              mLSize, mSievePerRound, mBlockSize, numHashCoeff);
+                              mLSize, mNLifo, mSievePerRound, mBlockSize,
+                              numHashCoeff);
                         LOG_F(INFO,
                               "Wall time: %.3f s, loop iterations: %u, sieve jobs: %llu",
                               elapsed, iteration,
@@ -4288,6 +4605,18 @@ int main(int argc, char** argv) {
                 return 1;
             }
 
+            if (gMetalAutoTune) {
+                if (!metalSieveEvaluate(
+                        &miner, true, nullptr, nullptr, nullptr, nullptr)) {
+                    LOG_F(ERROR,
+                          "Metal autotune failed before the benchmark suite");
+                    return 1;
+                }
+            } else {
+                LOG_F(INFO,
+                      "Metal sieve autotune disabled; using safe defaults");
+            }
+
             // Run comprehensive benchmarks
             runMetalBenchmarks(device, &miner);
 
@@ -4333,7 +4662,8 @@ int main(int argc, char** argv) {
 
         const bool shouldAutoTune = gMetalAutoTune;
         if (shouldAutoTune) {
-            if (!metalSieveEvaluate(&miner, true)) {
+            if (!metalSieveEvaluate(
+                    &miner, true, nullptr, nullptr, nullptr, nullptr)) {
                 LOG_F(ERROR,
                       "Metal sieve autotune could not run the safe baseline; refusing to start mining");
                 return 1;

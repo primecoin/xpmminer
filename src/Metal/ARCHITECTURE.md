@@ -164,6 +164,15 @@ startup tuning measures the supported variants instead of treating the device
 family maximum as the optimum. Never assume CUDA warp size when using Metal
 SIMD-group operations.
 
+The phase-2 sieve prefetch depth (`NLIFO`) is specialized separately from the
+threadgroup size. HIP can use a compile-time C array for this window, while a
+dynamically indexed thread array in MSL may spill into per-thread memory.
+Metal therefore exposes four explicit `uint4` register banks and specializes
+the access switch with function constant 1. Only the banks reachable by the
+selected depth should survive compilation. Supported depths are 1, 2, 4, 6,
+8, 12, and 16; the host rejects any depth for which `PCOUNT / LSIZE <= NLIFO`,
+because the warm-up needs one prime group beyond the prefetch window.
+
 ## Metal-specific code paths
 
 - `jsonHashMod` and `blockHashMod` have different SHA-256 front ends but call
@@ -212,10 +221,21 @@ geometries, and exact CPU/GPU block-header hashes across 4096 nonces.
 network or submission and reports hashes, effective sieve scan, candidates
 entering Fermat, final candidates, and CPU validation mismatches.
 
-The normal startup tuner uses a short isolated sieve search. The opt-in
-`--metal-autotune-mining` mode sends its three highest-ranked configurations
-through that deterministic mining pipeline for about one second each. It adds
-roughly three seconds and remains disabled by default.
+The normal startup tuner uses a short isolated sieve search. It first selects
+`SIZE`, `STRIPES`, `PCOUNT`, and `LSIZE` with the historical NLIFO=4 pipeline,
+then screens the supported NLIFO depths only at that winning geometry. This
+keeps NLIFO out of the full geometry Cartesian product. Every depth must
+produce the same deterministic bitmap digest and candidate counts as NLIFO=4;
+the fastest three valid depths are measured again before selection. The M4 Pro
+used during development selected NLIFO=1, but this is intentionally measured
+rather than hard-coded for other Apple GPU generations.
+
+The opt-in `--metal-autotune-mining` mode sends the three highest-ranked
+geometry configurations, and later the three NLIFO finalists, through the
+deterministic mining pipeline for about one second each. It remains disabled
+by default. `-b` runs the default tuner before the benchmark suite so its sieve
+checks and performance measurements use the configuration that normal mining
+would select.
 
 Like the HIP and CUDA frontends, Metal defaults to traditional
 `getblocktemplate` node mining:

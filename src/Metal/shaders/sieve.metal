@@ -196,32 +196,58 @@ inline void sieve_impl(
         }
     }
 
-    // Phase 2: LIFO buffer for larger primes
+    // Phase 2: rotating register window for larger primes. Four explicit
+    // vector banks avoid dynamically indexed thread arrays, which Metal may
+    // lower to per-thread memory. Function-constant specialization removes
+    // banks that are unreachable for smaller SIEVE_NLIFO values.
     constant uint2* pprimes = &primes[id];
     device uint* poffset = &offset[id];
 
-    // Metal may place dynamically indexed thread arrays in per-thread memory.
-    // Four-lane vectors keep this small rotating prefetch window in registers.
-    uint4 plifo;
-    uint4 fiplifo;
-    uint4 olifo;
+    struct RegisterWindow {
+        uint4 bank0;
+        uint4 bank1;
+        uint4 bank2;
+        uint4 bank3;
+    };
+    RegisterWindow plifo;
+    RegisterWindow fiplifo;
+    RegisterWindow olifo;
 
-    for (uint i = 0; i < NLIFO; ++i) {
+    auto windowRead = [](thread RegisterWindow& window, uint index) {
+        const uint lane = index & 3u;
+        switch (index >> 2) {
+            case 0: return window.bank0[lane];
+            case 1: return window.bank1[lane];
+            case 2: return window.bank2[lane];
+            default: return window.bank3[lane];
+        }
+    };
+    auto windowWrite = [](thread RegisterWindow& window, uint index, uint value) {
+        const uint lane = index & 3u;
+        switch (index >> 2) {
+            case 0: window.bank0[lane] = value; break;
+            case 1: window.bank1[lane] = value; break;
+            case 2: window.bank2[lane] = value; break;
+            default: window.bank3[lane] = value; break;
+        }
+    };
+
+    for (uint i = 0; i < SIEVE_NLIFO; ++i) {
         pprimes += lsize;
         poffset += lsize;
 
         const uint2 tmp = *pprimes;
-        plifo[i] = tmp.x;
-        fiplifo[i] = tmp.y;
-        olifo[i] = *poffset;
+        windowWrite(plifo, i, tmp.x);
+        windowWrite(fiplifo, i, tmp.y);
+        windowWrite(olifo, i, *poffset);
     }
 
     uint lpos = 0;
 
     for (uint ip = 1; ip < SIEVERANGE3; ++ip) {
-        const uint prime = plifo[lpos];
-        const float fiprime = as_type<float>(fiplifo[lpos]);
-        uint pos = olifo[lpos];
+        const uint prime = windowRead(plifo, lpos);
+        const float fiprime = as_type<float>(windowRead(fiplifo, lpos));
+        uint pos = windowRead(olifo, lpos);
 
         pos += ((uint)(fentry * fiprime) * prime);
         pos -= entry;
@@ -271,23 +297,24 @@ inline void sieve_impl(
             }
         }
 
-        if (ip + NLIFO < SCOUNT / lsize) {
+        if (ip + SIEVE_NLIFO < SCOUNT / lsize) {
             pprimes += lsize;
             poffset += lsize;
 
             const uint2 tmp = *pprimes;
-            plifo[lpos] = tmp.x;
-            fiplifo[lpos] = tmp.y;
-            olifo[lpos] = *poffset;
+            windowWrite(plifo, lpos, tmp.x);
+            windowWrite(fiplifo, lpos, tmp.y);
+            windowWrite(olifo, lpos, *poffset);
         }
 
-        lpos = (lpos + 1) & (NLIFO - 1);
+        if (++lpos == SIEVE_NLIFO)
+            lpos = 0;
     }
 
     for (uint ip = SIEVERANGE3; ip < SCOUNT / lsize; ++ip) {
-        const uint prime = plifo[lpos];
-        const float fiprime = as_type<float>(fiplifo[lpos]);
-        uint pos = olifo[lpos];
+        const uint prime = windowRead(plifo, lpos);
+        const float fiprime = as_type<float>(windowRead(fiplifo, lpos));
+        uint pos = windowRead(olifo, lpos);
 
         pos += ((uint)(fentry * fiprime) * prime);
         pos -= entry;
@@ -297,17 +324,18 @@ inline void sieve_impl(
         if (index < tileSize)
             atomic_fetch_or_explicit((threadgroup atomic_uint*)&sieve_local[index], 1u << (pos % 32), memory_order_relaxed);
 
-        if (ip + NLIFO < SCOUNT / lsize) {
+        if (ip + SIEVE_NLIFO < SCOUNT / lsize) {
             pprimes += lsize;
             poffset += lsize;
 
             const uint2 tmp = *pprimes;
-            plifo[lpos] = tmp.x;
-            fiplifo[lpos] = tmp.y;
-            olifo[lpos] = *poffset;
+            windowWrite(plifo, lpos, tmp.x);
+            windowWrite(fiplifo, lpos, tmp.y);
+            windowWrite(olifo, lpos, *poffset);
         }
 
-        lpos = (lpos + 1) & (NLIFO - 1);
+        if (++lpos == SIEVE_NLIFO)
+            lpos = 0;
     }
 
     // Synchronize and copy threadgroup memory to device memory

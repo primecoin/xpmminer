@@ -113,6 +113,7 @@ bool hipCompileKernel(
     hipModule_t* module,
     int majorComputeCapability,
     int minorComputeCapability,
-    bool needRebuild);
+    bool needRebuild,
+    bool verbose = true);
 
 #endif //__HIPLIB_H_

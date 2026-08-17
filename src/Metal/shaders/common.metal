@@ -102,7 +102,7 @@ constant uint SMALL_PRIMES[20] = {
 // This keeps the hot address arithmetic compile-time constant while allowing
 // older Apple GPUs to use their 512-thread limit correctly.
 constant uint SIEVE_LSIZE_LOG2 [[function_constant(0)]];
-constant uint NLIFO = 4;  // LIFO buffer depth for prime prefetching
+constant uint SIEVE_NLIFO [[function_constant(1)]];
 
 // Batch sizes match the CUDA/HIP schedules for each supported size.
 constant uint SIEVE_NPS_1024[8] = { 4, 4, 5, 6, 7, 7, 7, 9 };
