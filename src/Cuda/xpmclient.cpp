@@ -7,10 +7,18 @@
 
 #include "xpmclient.h"
 #include <getopt.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <algorithm>
+#include <cctype>
+#include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <memory>
 #include <set>
+#include <sstream>
 #include "benchmarks.h"
 #include "primecoin.h"
 #include "system.h"
@@ -37,6 +45,8 @@ void _blkmk_bin2hex(char* out, void* data, size_t datasz) {
 }
 
 unsigned gDebug = 0;
+static bool gCudaAutoTune = true;
+static bool gCudaRetune = false;
 int gExtensionsNum = 9;
 int gPrimorial = 19;
 int gSieveSize = 10;
@@ -202,7 +212,8 @@ PrimeMiner::~PrimeMiner() {
 bool PrimeMiner::Initialize(
     CUcontext context,
     CUdevice device,
-    CUmodule module) {
+    CUmodule module,
+    bool reportConfiguration) {
     _context = context;
     cuCtxSetCurrent(context);
 
@@ -245,21 +256,24 @@ bool PrimeMiner::Initialize(
         mConfig = *config._hostData;
     }
 
-    LOG_F(
-        INFO,
-        "N=%d SIZE=%d STRIPES=%d WIDTH=%d PCOUNT=%d TARGET=%d",
-        mConfig.N,
-        mConfig.SIZE,
-        mConfig.STRIPES,
-        mConfig.WIDTH,
-        mConfig.PCOUNT,
-        mConfig.TARGET);
+    if (reportConfiguration) {
+        LOG_F(
+            INFO,
+            "N=%d SIZE=%d STRIPES=%d WIDTH=%d PCOUNT=%d TARGET=%d",
+            mConfig.N,
+            mConfig.SIZE,
+            mConfig.STRIPES,
+            mConfig.WIDTH,
+            mConfig.PCOUNT,
+            mConfig.TARGET);
+    }
 
     int computeUnits;
     CUDA_SAFE_CALL(cuDeviceGetAttribute(
         &computeUnits, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
     mBlockSize = computeUnits * 4 * 64;
-    LOG_F(INFO, "GPU %d: has %d CUs", mID, computeUnits);
+    if (reportConfiguration)
+        LOG_F(INFO, "GPU %d: has %d CUs", mID, computeUnits);
     return true;
 }
 
@@ -1110,7 +1124,11 @@ void PrimeMiner::Mining(GetBlockTemplateContext* gbp, SubmitContext* submit) {
     LOG_F(INFO, "GPU %d stopped.", mID);
 }
 
-void PrimeMiner::MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds) {
+MiningBenchmarkResult PrimeMiner::MiningGetWork(
+    GetWorkContext* ctx,
+    unsigned benchmarkSeconds,
+    bool reportBenchmarkResults) {
+    MiningBenchmarkResult benchmarkResult;
     cuCtxSetCurrent(_context);
     const bool benchmarkMode = benchmarkSeconds > 0;
     time_t starttime = time(0);
@@ -2024,74 +2042,350 @@ void PrimeMiner::MiningGetWork(GetWorkContext* ctx, unsigned benchmarkSeconds) {
         iteration++;
 
         if (benchmarkMode) {
-            const double elapsed = std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - benchmarkStart).count();
+            const double elapsed =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - benchmarkStart)
+                    .count();
             if (elapsed >= benchmarkSeconds) {
                 const double sieveRange =
                     (double)mConfig.SIZE * 32.0 * mConfig.STRIPES;
-                const double retainedPercent = benchmarkGpuMatches == 0 ? 100.0 :
-                    100.0 * (double)benchmarkMatchesRetained /
+                const double retainedPercent = benchmarkGpuMatches == 0
+                    ? 100.0
+                    : 100.0 * (double)benchmarkMatchesRetained /
                         (double)benchmarkGpuMatches;
-                LOG_F(INFO, "");
-                LOG_F(INFO, "=== End-to-end blocktree.get_work benchmark (CUDA) ===");
-                LOG_F(INFO,
-                      "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
-                      "LSIZE=%u, sieves/round=%u, Fermat batch=%u, "
-                      "hash coefficient=%u",
-                      mConfig.SIZE, mConfig.STRIPES, mConfig.PCOUNT,
-                      mLSize, mSievePerRound, mBlockSize, numHashCoeff);
-                LOG_F(INFO,
-                      "Wall time: %.3f s, loop iterations: %u, sieve jobs: %llu",
-                      elapsed, iteration,
-                      (unsigned long long)benchmarkSieveJobs);
-                LOG_F(INFO,
-                      "JSON hashes dispatched: %.3f M/s (%llu total)",
-                      benchmarkHashesDispatched / elapsed / 1000000.0,
-                      (unsigned long long)benchmarkHashesDispatched);
-                LOG_F(INFO,
-                      "GPU hash matches: %.1f/s; retained for CPU: %.1f/s "
-                      "(%.4f%% retained)",
-                      benchmarkGpuMatches / elapsed,
-                      benchmarkMatchesRetained / elapsed,
-                      retainedPercent);
-                LOG_F(INFO,
-                      "CPU-validated hashes feeding sieve: %.1f/s",
-                      benchmarkValidHashes / elapsed);
-                LOG_F(INFO,
-                      "Effective end-to-end sieve scan: %.3f G/s",
-                      sieveRange * benchmarkSieveJobs / elapsed / 1000000000.0);
-                LOG_F(INFO,
-                      "Sieve candidates feeding Fermat: %.1f/s (%llu total)",
-                      benchmarkSieveCandidates / elapsed,
-                      (unsigned long long)benchmarkSieveCandidates);
-                LOG_F(INFO,
-                      "Final GPU candidates: %.1f/s; CPU chain checks: %.1f/s; "
-                      "shares meeting target: %llu",
-                      benchmarkFinalCandidates / elapsed,
-                      benchmarkCpuCandidates / elapsed,
-                      (unsigned long long)benchmarkShares);
-                LOG_F(INFO,
-                      "Hash-starved loop iterations: %llu; pipeline validation errors: %llu",
-                      (unsigned long long)benchmarkHashStarvations,
-                      (unsigned long long)benchmarkPipelineErrors);
-                LOG_F(INFO, "=======================================================");
+                benchmarkResult.completed =
+                    benchmarkSieveJobs > 0 && benchmarkPipelineErrors == 0;
+                benchmarkResult.elapsedSeconds = elapsed;
+                benchmarkResult.effectiveScanGps =
+                    sieveRange * benchmarkSieveJobs / elapsed / 1000000000.0;
+                benchmarkResult.sieveCandidatesPerSecond =
+                    benchmarkSieveCandidates / elapsed;
+                benchmarkResult.finalCandidatesPerSecond =
+                    benchmarkFinalCandidates / elapsed;
+                benchmarkResult.pipelineErrors = benchmarkPipelineErrors;
+
+                if (reportBenchmarkResults) {
+                    LOG_F(INFO, "%s", "");
+                    LOG_F(
+                        INFO,
+                        "=== End-to-end blocktree.get_work benchmark (CUDA) ===");
+                    LOG_F(
+                        INFO,
+                        "Configuration: SIZE=%u, STRIPES=%u, PCOUNT=%u, "
+                        "LSIZE=%u, sieves/round=%u, Fermat batch=%u, "
+                        "hash coefficient=%u",
+                        mConfig.SIZE,
+                        mConfig.STRIPES,
+                        mConfig.PCOUNT,
+                        mLSize,
+                        mSievePerRound,
+                        mBlockSize,
+                        numHashCoeff);
+                    LOG_F(
+                        INFO,
+                        "Wall time: %.3f s, loop iterations: %u, sieve jobs: %llu",
+                        elapsed,
+                        iteration,
+                        (unsigned long long)benchmarkSieveJobs);
+                    LOG_F(
+                        INFO,
+                        "JSON hashes dispatched: %.3f M/s (%llu total)",
+                        benchmarkHashesDispatched / elapsed / 1000000.0,
+                        (unsigned long long)benchmarkHashesDispatched);
+                    LOG_F(
+                        INFO,
+                        "GPU hash matches: %.1f/s; retained for CPU: %.1f/s "
+                        "(%.4f%% retained)",
+                        benchmarkGpuMatches / elapsed,
+                        benchmarkMatchesRetained / elapsed,
+                        retainedPercent);
+                    LOG_F(
+                        INFO,
+                        "CPU-validated hashes feeding sieve: %.1f/s",
+                        benchmarkValidHashes / elapsed);
+                    LOG_F(
+                        INFO,
+                        "Effective end-to-end sieve scan: %.3f G/s",
+                        benchmarkResult.effectiveScanGps);
+                    LOG_F(
+                        INFO,
+                        "Sieve candidates feeding Fermat: %.1f/s (%llu total)",
+                        benchmarkResult.sieveCandidatesPerSecond,
+                        (unsigned long long)benchmarkSieveCandidates);
+                    LOG_F(
+                        INFO,
+                        "Final GPU candidates: %.1f/s; CPU chain checks: %.1f/s; "
+                        "shares meeting target: %llu",
+                        benchmarkResult.finalCandidatesPerSecond,
+                        benchmarkCpuCandidates / elapsed,
+                        (unsigned long long)benchmarkShares);
+                    LOG_F(
+                        INFO,
+                        "Hash-starved loop iterations: %llu; pipeline validation errors: %llu",
+                        (unsigned long long)benchmarkHashStarvations,
+                        (unsigned long long)benchmarkPipelineErrors);
+                    LOG_F(
+                        INFO,
+                        "=======================================================");
+                }
                 break;
             }
         }
     }
 
-    LOG_F(INFO, "GPU %d stopped.", mID);
+    CUDA_SAFE_CALL(cuEventDestroy(sieveEvent));
+    if (!benchmarkMode || reportBenchmarkResults)
+        LOG_F(INFO, "GPU %d stopped.", mID);
+    return benchmarkResult;
 }
 
-void dumpSieveConstants(
-    unsigned weaveDepth,
-    unsigned threadsNum,
-    unsigned windowSize,
-    unsigned* primes,
-    std::ostream& file) {
+MiningBenchmarkResult PrimeMiner::BenchmarkMining(
+    unsigned benchmarkSeconds,
+    bool reportResults) {
+    return MiningGetWork(nullptr, benchmarkSeconds, reportResults);
+}
+
+namespace {
+
+struct CudaKernelConfig {
+    unsigned size;
+    unsigned stripes;
+    unsigned primeCount;
+    unsigned lsize;
+    unsigned nlifo;
+};
+
+struct TunedCudaModule {
+    CudaKernelConfig config;
+    CUmodule module;
+    MiningBenchmarkResult result;
+    bool usable;
+
+    explicit TunedCudaModule(const CudaKernelConfig& value)
+        : config(value), module(nullptr), usable(false) {}
+};
+
+constexpr unsigned kCudaAutotuneCacheVersion = 2;
+constexpr unsigned kCudaPrefetchDepths[] = {1, 2, 4, 6, 8, 12, 16};
+constexpr unsigned kCudaAutotuneScreenSeconds = 1;
+constexpr unsigned kCudaGeometryFinalSeconds = 3;
+constexpr unsigned kCudaAutotuneFinalSeconds = 5;
+constexpr size_t kCudaGeometryFinalistCount = 3;
+constexpr size_t kCudaAutotuneFinalistCount = 3;
+constexpr const char* kCudaCacheDirectory = "xpmcuda-cache";
+
+bool ensureCudaCacheDirectory() {
+    struct stat info{};
+    if (stat(kCudaCacheDirectory, &info) == 0) {
+        if (S_ISDIR(info.st_mode))
+            return true;
+        LOG_F(
+            ERROR,
+            "CUDA cache path exists but is not a directory: %s",
+            kCudaCacheDirectory);
+        return false;
+    }
+    if (errno != ENOENT) {
+        LOG_F(
+            ERROR,
+            "Could not inspect CUDA cache directory %s: %s",
+            kCudaCacheDirectory,
+            std::strerror(errno));
+        return false;
+    }
+    if (mkdir(kCudaCacheDirectory, 0755) == 0)
+        return true;
+    if (errno == EEXIST && stat(kCudaCacheDirectory, &info) == 0 &&
+        S_ISDIR(info.st_mode)) {
+        return true;
+    }
+    LOG_F(
+        ERROR,
+        "Could not create CUDA cache directory %s: %s",
+        kCudaCacheDirectory,
+        std::strerror(errno));
+    return false;
+}
+
+std::string safeCudaName(const char* value) {
+    std::string result = value ? value : "unknown";
+    for (char& character : result) {
+        if (!std::isalnum(static_cast<unsigned char>(character)) &&
+            character != '-' && character != '_') {
+            character = '_';
+        }
+    }
+    return result;
+}
+
+unsigned exactLog2(unsigned value) {
+    unsigned result = 0;
+    while (value > 1) {
+        value >>= 1;
+        ++result;
+    }
+    return result;
+}
+
+bool getCudaDeviceLimits(
+    const CUDADeviceInfo& device,
+    int* maxThreadsPerBlock,
+    int* sharedMemoryPerBlock,
+    int* multiprocessorCount) {
+    return cuDeviceGetAttribute(
+               maxThreadsPerBlock,
+               CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+               device.device) == CUDA_SUCCESS &&
+        cuDeviceGetAttribute(
+            sharedMemoryPerBlock,
+            CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK,
+            device.device) == CUDA_SUCCESS &&
+        cuDeviceGetAttribute(
+            multiprocessorCount,
+            CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+            device.device) == CUDA_SUCCESS;
+}
+
+bool isUsableCudaConfig(
+    const CudaKernelConfig& config,
+    const CUDADeviceInfo& device) {
+    if (config.size == 0 || config.stripes == 0 || (config.stripes & 1u) ||
+        config.primeCount == 0) {
+        return false;
+    }
+    if (config.lsize < 128 || config.lsize > 1024 ||
+        (config.lsize & (config.lsize - 1)) != 0 ||
+        config.primeCount % config.lsize != 0 || config.nlifo < 1 ||
+        config.nlifo > 16 || config.primeCount / config.lsize <= config.nlifo) {
+        return false;
+    }
+
+    int maxThreadsPerBlock = 0;
+    int sharedMemoryPerBlock = 0;
+    int multiprocessorCount = 0;
+    if (!getCudaDeviceLimits(
+            device,
+            &maxThreadsPerBlock,
+            &sharedMemoryPerBlock,
+            &multiprocessorCount)) {
+        return false;
+    }
+    (void)multiprocessorCount;
+    if (config.lsize > (unsigned)maxThreadsPerBlock ||
+        (uint64_t)config.size * sizeof(uint32_t) >
+            (uint64_t)sharedMemoryPerBlock) {
+        return false;
+    }
+    return ((uint64_t)config.size * config.stripes / 2) % 256 == 0;
+}
+
+std::vector<CudaKernelConfig> cudaAutotuneCandidates(
+    const CUDADeviceInfo& device) {
+    std::vector<CudaKernelConfig> result;
+    auto add = [&](unsigned size,
+                   unsigned stripes,
+                   unsigned primeCount,
+                   unsigned lsize) {
+        CudaKernelConfig candidate{size, stripes, primeCount, lsize, 4};
+        if (!isUsableCudaConfig(candidate, device))
+            return;
+        for (const CudaKernelConfig& existing : result) {
+            if (existing.size == candidate.size &&
+                existing.stripes == candidate.stripes &&
+                existing.primeCount == candidate.primeCount &&
+                existing.lsize == candidate.lsize &&
+                existing.nlifo == candidate.nlifo) {
+                return;
+            }
+        }
+        result.push_back(candidate);
+    };
+
+    // Roughly equal 82.6M-number ranges, spanning the shared-memory and
+    // workgroup trade-offs that proved important on Metal and HIP.
+    add(12288, 210, 65536, 1024); // historical CUDA baseline
+    add(12288, 210, 65536, 512);
+    add(12288, 210, 65536, 256);
+    add(8192, 316, 65536, 1024);
+    add(8192, 316, 65536, 512);
+    add(8192, 316, 65536, 256);
+    add(8192, 316, 65536, 128);
+    add(6144, 420, 65536, 1024);
+    add(6144, 420, 65536, 512);
+    add(6144, 420, 65536, 256);
+    add(4096, 630, 65536, 512);
+    add(4096, 630, 65536, 256);
+
+    // Refine the neighborhood around the historical shape while keeping the
+    // total scan range within 0.4%. These points expose occupancy transitions
+    // without turning the tuner into a large Cartesian product.
+    add(11264, 230, 65536, 512);
+    add(9216, 280, 65536, 512);
+
+    // A shallower weave reduces sieve work but increases Fermat traffic. The
+    // real-pipeline score determines whether the complete trade-off wins.
+    add(8192, 316, 32768, 1024);
+    add(8192, 316, 32768, 512);
+    add(12288, 210, 32768, 512);
+    add(12288, 210, 36864, 512);
+    add(12288, 210, 40960, 512);
+    add(12288, 210, 49152, 512);
+    add(12288, 210, 57344, 512);
+    add(12288, 210, 81920, 512);
+    return result;
+}
+
+std::string cudaKernelCacheName(
+    const CUDADeviceInfo& device,
+    const CudaKernelConfig& config) {
+    std::ostringstream stream;
+    stream << kCudaCacheDirectory << "/kernelxpm_sm"
+           << device.majorComputeCapability << device.minorComputeCapability
+           << "_s" << config.size << "_t" << config.stripes << "_p"
+           << config.primeCount << "_l" << config.lsize << "_f" << config.nlifo
+           << ".ptx";
+    return stream.str();
+}
+
+std::string cudaAutotuneCacheName(const CUDADeviceInfo& device) {
+    int driverVersion = 0;
+    int nvrtcMajor = 0;
+    int nvrtcMinor = 0;
+    int maxThreadsPerBlock = 0;
+    int sharedMemoryPerBlock = 0;
+    int multiprocessorCount = 0;
+    cuDriverGetVersion(&driverVersion);
+    nvrtcVersion(&nvrtcMajor, &nvrtcMinor);
+    getCudaDeviceLimits(
+        device,
+        &maxThreadsPerBlock,
+        &sharedMemoryPerBlock,
+        &multiprocessorCount);
+    std::ostringstream stream;
+    stream << kCudaCacheDirectory << "/autotune-" << safeCudaName(device.name)
+           << "-sm" << device.majorComputeCapability
+           << device.minorComputeCapability << "-cu" << multiprocessorCount
+           << "-drv" << driverVersion << "-nvrtc" << nvrtcMajor << '_'
+           << nvrtcMinor << ".cfg";
+    return stream.str();
+}
+
+bool compileCudaModule(
+    const CUDADeviceInfo& device,
+    const CudaKernelConfig& config,
+    CUmodule* module,
+    bool verbose) {
+    if (!ensureCudaCacheDirectory())
+        return false;
+
+    const unsigned width = 20;
+    const unsigned target = 10;
+    const unsigned multiplierSizeLimits[3] = {24, 31, 35};
     unsigned ranges[3] = {0, 0, 0};
-    for (unsigned i = 0; i < weaveDepth / threadsNum; i++) {
-        unsigned prime = primes[i * threadsNum];
+    const unsigned primeGroups = config.primeCount / config.lsize;
+    const unsigned windowSize = config.size * 32;
+    for (unsigned i = 0; i < primeGroups; ++i) {
+        unsigned prime = gPrimes[13 + i * config.lsize];
         if (ranges[0] == 0 && windowSize / prime <= 2)
             ranges[0] = i;
         if (ranges[1] == 0 && windowSize / prime <= 1)
@@ -2099,11 +2393,389 @@ void dumpSieveConstants(
         if (ranges[2] == 0 && windowSize / prime == 0)
             ranges[2] = i;
     }
+    if (ranges[0] == 0)
+        ranges[0] = primeGroups;
+    if (ranges[1] == 0)
+        ranges[1] = primeGroups;
+    if (ranges[2] == 0)
+        ranges[2] = primeGroups;
 
-    file << "#define SIEVERANGE1 " << ranges[0] << "\n";
-    file << "#define SIEVERANGE2 " << ranges[1] << "\n";
-    file << "#define SIEVERANGE3 " << ranges[2] << "\n";
+    std::vector<std::string> ownedOptions;
+    auto define = [&](const char* name, unsigned value) {
+        ownedOptions.push_back(
+            std::string("-D") + name + "=" + std::to_string(value));
+    };
+    ownedOptions.push_back(
+        std::string("--gpu-architecture=compute_") +
+        std::to_string(device.majorComputeCapability) +
+        std::to_string(device.minorComputeCapability));
+    define("STRIPES", config.stripes);
+    define("WIDTH", width);
+    define("PCOUNT", config.primeCount);
+    define("TARGET", target);
+    define("SIZE", config.size);
+    define("LSIZE", config.lsize);
+    define("LSIZELOG2", exactLog2(config.lsize));
+    define("NLIFO", config.nlifo);
+    define("LIMIT13", multiplierSizeLimits[0]);
+    define("LIMIT14", multiplierSizeLimits[1]);
+    define("LIMIT15", multiplierSizeLimits[2]);
+    define("SIEVERANGE1", ranges[0]);
+    define("SIEVERANGE2", ranges[1]);
+    define("SIEVERANGE3", ranges[2]);
+
+    std::vector<const char*> options;
+    options.reserve(ownedOptions.size());
+    for (const std::string& option : ownedOptions)
+        options.push_back(option.c_str());
+
+    const std::vector<const char*> sources = {
+        "xpm/cuda/helpers.cu",
+        "xpm/cuda/procs.cu",
+        "xpm/cuda/fermat.cu",
+        "xpm/cuda/sieve.cu",
+        "xpm/cuda/sha256.cu",
+        "xpm/cuda/json_sha256.cu",
+        "xpm/cuda/benchmarks.cu"};
+    const std::string kernelName = cudaKernelCacheName(device, config);
+    CUDA_SAFE_CALL(cuCtxSetCurrent(device.context));
+    return cudaCompileKernel(
+        kernelName.c_str(),
+        sources,
+        options.data(),
+        (int)options.size(),
+        module,
+        device.majorComputeCapability,
+        device.minorComputeCapability,
+        false,
+        verbose);
 }
+
+bool loadCudaAutotuneCache(
+    const CUDADeviceInfo& device,
+    CudaKernelConfig* config,
+    double* score) {
+    if (!ensureCudaCacheDirectory())
+        return false;
+    std::ifstream file(cudaAutotuneCacheName(device));
+    unsigned version = 0;
+    CudaKernelConfig cached{};
+    double cachedScore = 0.0;
+    if (!(file >> version >> cached.size >> cached.stripes >>
+          cached.primeCount >> cached.lsize >> cached.nlifo >> cachedScore) ||
+        version != kCudaAutotuneCacheVersion ||
+        !isUsableCudaConfig(cached, device)) {
+        return false;
+    }
+    *config = cached;
+    *score = cachedScore;
+    return true;
+}
+
+void saveCudaAutotuneCache(
+    const CUDADeviceInfo& device,
+    const CudaKernelConfig& config,
+    double score) {
+    if (!ensureCudaCacheDirectory())
+        return;
+    const std::string path = cudaAutotuneCacheName(device);
+    std::ofstream file(path, std::ofstream::trunc);
+    file << kCudaAutotuneCacheVersion << ' ' << config.size << ' '
+         << config.stripes << ' ' << config.primeCount << ' ' << config.lsize
+         << ' ' << config.nlifo << ' ' << std::setprecision(17) << score
+         << '\n';
+    if (!file)
+        LOG_F(
+            WARNING, "Could not save CUDA autotune result to %s", path.c_str());
+}
+
+bool selectCudaConfiguration(
+    const CUDADeviceInfo& device,
+    unsigned devicesNum,
+    unsigned depth,
+    CudaKernelConfig* selectedConfig,
+    CUmodule* selectedModule) {
+    const CudaKernelConfig safeConfig{12288, 210, 65536, 1024, 4};
+
+    if (!gCudaAutoTune) {
+        *selectedConfig = safeConfig;
+        if (!compileCudaModule(device, safeConfig, selectedModule, true))
+            return false;
+        LOG_F(
+            INFO,
+            "CUDA autotune disabled; using LSIZE=%u SIZE=%u STRIPES=%u "
+            "PCOUNT=%u NLIFO=%u",
+            safeConfig.lsize,
+            safeConfig.size,
+            safeConfig.stripes,
+            safeConfig.primeCount,
+            safeConfig.nlifo);
+        return true;
+    }
+
+    CudaKernelConfig cachedConfig{};
+    double cachedScore = 0.0;
+    if (!gCudaRetune &&
+        loadCudaAutotuneCache(device, &cachedConfig, &cachedScore)) {
+        if (compileCudaModule(
+                device, cachedConfig, selectedModule, gDebug != 0)) {
+            *selectedConfig = cachedConfig;
+            LOG_F(
+                INFO,
+                "CUDA autotune cache selected LSIZE=%u SIZE=%u STRIPES=%u "
+                "PCOUNT=%u NLIFO=%u (%.3f G/s)",
+                cachedConfig.lsize,
+                cachedConfig.size,
+                cachedConfig.stripes,
+                cachedConfig.primeCount,
+                cachedConfig.nlifo,
+                cachedScore);
+            return true;
+        }
+        LOG_F(
+            WARNING, "Cached CUDA configuration could not be loaded; retuning");
+    }
+
+    const std::vector<CudaKernelConfig> candidates =
+        cudaAutotuneCandidates(device);
+    if (candidates.empty()) {
+        LOG_F(ERROR, "No CUDA autotune configuration fits this device");
+        return false;
+    }
+
+    size_t prefetchVariantCount = 0;
+    for (unsigned depthValue : kCudaPrefetchDepths) {
+        if (depthValue != 4)
+            ++prefetchVariantCount;
+    }
+    const size_t totalConfigurations = candidates.size() + prefetchVariantCount;
+    LOG_F(
+        INFO,
+        "Starting CUDA autotune on GPU %d (%zu staged configurations; first "
+        "run may take a while, results are cached)...",
+        device.index,
+        totalConfigurations);
+    const bool showProgress = !gDebug && isatty(fileno(stderr));
+    const size_t progressTotal = totalConfigurations * 2 +
+        kCudaGeometryFinalistCount + kCudaAutotuneFinalistCount;
+    auto renderProgress = [&](size_t completed) {
+        if (!showProgress)
+            return;
+        constexpr size_t barWidth = 28;
+        const size_t filled = completed * barWidth / progressTotal;
+        const size_t percent = completed * 100 / progressTotal;
+        fprintf(stderr, "\rCUDA autotune GPU %d [", device.index);
+        for (size_t i = 0; i < barWidth; ++i)
+            fputc(i < filled ? '#' : '-', stderr);
+        fprintf(
+            stderr, "] %3zu%% (%zu/%zu)", percent, completed, progressTotal);
+        if (completed == progressTotal)
+            fputc('\n', stderr);
+        fflush(stderr);
+    };
+
+    const auto oldStderrVerbosity = loguru::g_stderr_verbosity;
+    if (!gDebug)
+        loguru::g_stderr_verbosity = loguru::Verbosity_ERROR;
+
+    std::vector<TunedCudaModule> modules;
+    modules.reserve(totalConfigurations);
+    size_t progress = 0;
+    renderProgress(progress);
+    for (const CudaKernelConfig& candidate : candidates) {
+        modules.emplace_back(candidate);
+        TunedCudaModule& compiled = modules.back();
+        if (compileCudaModule(
+                device, candidate, &compiled.module, gDebug != 0)) {
+            compiled.usable = true;
+        }
+        renderProgress(++progress);
+    }
+
+    int bestIndex = -1;
+    double bestScore = 0.0;
+    auto benchmarkCandidate = [&](size_t i,
+                                  unsigned benchmarkSeconds,
+                                  const char* phase,
+                                  size_t phaseIndex,
+                                  size_t phaseCount) {
+        TunedCudaModule& candidate = modules[i];
+        if (candidate.usable) {
+            PrimeMiner miner(
+                device.index, devicesNum, 5, depth, candidate.config.lsize);
+            if (miner.Initialize(
+                    device.context, device.device, candidate.module, false)) {
+                candidate.result =
+                    miner.BenchmarkMining(benchmarkSeconds, false);
+                if (candidate.result.completed &&
+                    (bestIndex < 0 ||
+                     candidate.result.effectiveScanGps > bestScore)) {
+                    bestIndex = (int)i;
+                    bestScore = candidate.result.effectiveScanGps;
+                }
+                if (gDebug) {
+                    LOG_F(
+                        INFO,
+                        "CUDA autotune %s %zu/%zu: LSIZE=%u SIZE=%u "
+                        "STRIPES=%u PCOUNT=%u NLIFO=%u => %.3f G/s, "
+                        "%.1f candidates/s, errors=%llu",
+                        phase,
+                        phaseIndex,
+                        phaseCount,
+                        candidate.config.lsize,
+                        candidate.config.size,
+                        candidate.config.stripes,
+                        candidate.config.primeCount,
+                        candidate.config.nlifo,
+                        candidate.result.effectiveScanGps,
+                        candidate.result.sieveCandidatesPerSecond,
+                        (unsigned long long)candidate.result.pipelineErrors);
+                }
+            }
+        }
+        renderProgress(++progress);
+    };
+
+    const size_t geometryCount = modules.size();
+    for (size_t i = 0; i < geometryCount; ++i)
+        benchmarkCandidate(
+            i,
+            kCudaAutotuneScreenSeconds,
+            "screen",
+            i + 1,
+            totalConfigurations);
+
+    if (bestIndex >= 0) {
+        std::vector<size_t> geometryFinalists;
+        for (size_t i = 0; i < geometryCount; ++i) {
+            if (modules[i].result.completed)
+                geometryFinalists.push_back(i);
+        }
+        std::sort(
+            geometryFinalists.begin(),
+            geometryFinalists.end(),
+            [&](size_t lhs, size_t rhs) {
+                return modules[lhs].result.effectiveScanGps >
+                    modules[rhs].result.effectiveScanGps;
+            });
+        if (geometryFinalists.size() > kCudaGeometryFinalistCount)
+            geometryFinalists.resize(kCudaGeometryFinalistCount);
+
+        const int screenBestIndex = bestIndex;
+        const double screenBestScore = bestScore;
+        bestIndex = -1;
+        bestScore = 0.0;
+        for (size_t rank = 0; rank < geometryFinalists.size(); ++rank) {
+            benchmarkCandidate(
+                geometryFinalists[rank],
+                kCudaGeometryFinalSeconds,
+                "geometry finalist",
+                rank + 1,
+                geometryFinalists.size());
+        }
+        if (bestIndex < 0) {
+            bestIndex = screenBestIndex;
+            bestScore = screenBestScore;
+        }
+    }
+
+    if (bestIndex >= 0) {
+        const CudaKernelConfig bestGeometry = modules[bestIndex].config;
+        const size_t prefetchBegin = modules.size();
+        for (unsigned depthValue : kCudaPrefetchDepths) {
+            if (depthValue == bestGeometry.nlifo)
+                continue;
+            CudaKernelConfig candidate = bestGeometry;
+            candidate.nlifo = depthValue;
+            modules.emplace_back(candidate);
+            TunedCudaModule& compiled = modules.back();
+            if (isUsableCudaConfig(candidate, device) &&
+                compileCudaModule(
+                    device, candidate, &compiled.module, gDebug != 0)) {
+                compiled.usable = true;
+            }
+            renderProgress(++progress);
+        }
+        for (size_t i = prefetchBegin; i < modules.size(); ++i)
+            benchmarkCandidate(
+                i,
+                kCudaAutotuneScreenSeconds,
+                "screen",
+                i + 1,
+                totalConfigurations);
+
+        std::vector<size_t> finalists;
+        for (size_t i = 0; i < modules.size(); ++i) {
+            const CudaKernelConfig& config = modules[i].config;
+            if (modules[i].result.completed &&
+                config.size == bestGeometry.size &&
+                config.stripes == bestGeometry.stripes &&
+                config.primeCount == bestGeometry.primeCount &&
+                config.lsize == bestGeometry.lsize) {
+                finalists.push_back(i);
+            }
+        }
+        std::sort(
+            finalists.begin(), finalists.end(), [&](size_t lhs, size_t rhs) {
+                return modules[lhs].result.effectiveScanGps >
+                    modules[rhs].result.effectiveScanGps;
+            });
+        if (finalists.size() > kCudaAutotuneFinalistCount)
+            finalists.resize(kCudaAutotuneFinalistCount);
+
+        const int screenBestIndex = bestIndex;
+        const double screenBestScore = bestScore;
+        bestIndex = -1;
+        bestScore = 0.0;
+        for (size_t rank = 0; rank < finalists.size(); ++rank) {
+            benchmarkCandidate(
+                finalists[rank],
+                kCudaAutotuneFinalSeconds,
+                "finalist",
+                rank + 1,
+                finalists.size());
+        }
+        if (bestIndex < 0) {
+            bestIndex = screenBestIndex;
+            bestScore = screenBestScore;
+        }
+        if (progress < progressTotal)
+            renderProgress(progressTotal);
+    }
+
+    loguru::g_stderr_verbosity = oldStderrVerbosity;
+
+    if (bestIndex < 0) {
+        LOG_F(ERROR, "CUDA autotune found no correct, usable configuration");
+        for (TunedCudaModule& candidate : modules) {
+            if (candidate.module)
+                cuModuleUnload(candidate.module);
+        }
+        return false;
+    }
+
+    *selectedConfig = modules[bestIndex].config;
+    *selectedModule = modules[bestIndex].module;
+    modules[bestIndex].module = nullptr;
+    for (TunedCudaModule& candidate : modules) {
+        if (candidate.module)
+            cuModuleUnload(candidate.module);
+    }
+    saveCudaAutotuneCache(device, *selectedConfig, bestScore);
+    LOG_F(
+        INFO,
+        "CUDA autotune selected LSIZE=%u SIZE=%u STRIPES=%u PCOUNT=%u "
+        "NLIFO=%u (end-to-end %.3f G/s)",
+        selectedConfig->lsize,
+        selectedConfig->size,
+        selectedConfig->stripes,
+        selectedConfig->primeCount,
+        selectedConfig->nlifo,
+        bestScore);
+    return true;
+}
+
+} // namespace
 
 enum CmdLineOptions {
     clDebug = 0,
@@ -2122,6 +2794,8 @@ enum CmdLineOptions {
     clProtocol,
     clWsUrl,
     clSubmitAllChains,
+    clNoCudaAutotune,
+    clCudaRetune,
     clHelp,
     clOptionLast,
     clOptionsNum
@@ -2149,6 +2823,10 @@ void printHelpMessage() {
     printf(
         "                       Cunningham2, BiTwin) instead of only BiTwin chains\n");
     printf(
+        "  --no-cuda-autotune: use the safe CUDA kernel configuration without tuning\n");
+    printf(
+        "  --cuda-retune: ignore the cached CUDA configuration and tune again\n");
+    printf(
         "  --extensions-num <number>: Eratosthenes sieve extensions number (default: %u)\n",
         gExtensionsNum);
     printf(
@@ -2169,8 +2847,7 @@ void initCmdLineOptions(option* options) {
     options[clDebug] = {"debug", no_argument, 0, 0};
     options[clThreadsNum] = {"threads", required_argument, &gThreadsNum, 0};
     options[clBenchmark] = {"benchmark", no_argument, 0, 'b'};
-    options[clMiningBenchmark] = {
-        "mining-benchmark", required_argument, 0, 0};
+    options[clMiningBenchmark] = {"mining-benchmark", required_argument, 0, 0};
     options[clExtensionsNum] = {
         "extensions-num", required_argument, &gExtensionsNum, 0};
     options[clPrimorial] = {"primorial", required_argument, &gPrimorial, 0};
@@ -2184,6 +2861,8 @@ void initCmdLineOptions(option* options) {
     options[clProtocol] = {"protocol", required_argument, 0, 0};
     options[clWsUrl] = {"ws-url", required_argument, 0, 0};
     options[clSubmitAllChains] = {"submit-all-chains", no_argument, 0, 0};
+    options[clNoCudaAutotune] = {"no-cuda-autotune", no_argument, 0, 0};
+    options[clCudaRetune] = {"cuda-retune", no_argument, 0, 0};
     options[clHelp] = {"help", no_argument, 0, 'h'};
     options[clOptionLast] = {0, 0, 0, 0};
 }
@@ -2251,6 +2930,12 @@ int main(int argc, char** argv) {
                     case clSubmitAllChains:
                         gSubmitAllChains = true;
                         break;
+                    case clNoCudaAutotune:
+                        gCudaAutoTune = false;
+                        break;
+                    case clCudaRetune:
+                        gCudaRetune = true;
+                        break;
                 }
                 break;
             case 'b':
@@ -2287,8 +2972,14 @@ int main(int argc, char** argv) {
 
     if (isBenchmark && miningBenchmarkSeconds > 0) {
         fprintf(
+            stderr, "Error: choose either --benchmark or --mining-benchmark\n");
+        exit(1);
+    }
+
+    if (!gCudaAutoTune && gCudaRetune) {
+        fprintf(
             stderr,
-            "Error: choose either --benchmark or --mining-benchmark\n");
+            "Error: --cuda-retune cannot be combined with --no-cuda-autotune\n");
         exit(1);
     }
 
@@ -2298,7 +2989,8 @@ int main(int argc, char** argv) {
         if (strcmp(gProtocol, "getwork") == 0) {
             useGetWork = true;
             if (!gWsUrl && !isBenchmark) {
-                fprintf(stderr, "Error: --ws-url required for getwork protocol\n");
+                fprintf(
+                    stderr, "Error: --ws-url required for getwork protocol\n");
                 printHelpMessage();
                 exit(1);
             }
@@ -2322,7 +3014,8 @@ int main(int argc, char** argv) {
     printf("block sum is %d\n", gThreadsNum);
     printf(
         "Using protocol: %s\n",
-        miningBenchmarkSeconds > 0 ? "blocktree.get_work benchmark" : gProtocol);
+        miningBenchmarkSeconds > 0 ? "blocktree.get_work benchmark"
+                                   : gProtocol);
 
     // Log experimental feature status
     if (gSubmitAllChains) {
@@ -2382,8 +3075,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    unsigned clKernelLSize = 1024;
-    unsigned clKernelLSizeLog2 = 10;
     std::vector<CUDADeviceInfo> gpus;
     int devicesNum = 0;
     CUDA_SAFE_CALL(cuInit(0));
@@ -2423,6 +3114,8 @@ int main(int argc, char** argv) {
 #endif
 
         CUDA_SAFE_CALL(cuDeviceGetName(name, sizeof(name), info.device));
+        strncpy(info.name, name, sizeof(info.name) - 1);
+        info.name[sizeof(info.name) - 1] = '\0';
         gpus.push_back(info);
         LOG_F(
             INFO,
@@ -2433,71 +3126,22 @@ int main(int argc, char** argv) {
             info.minorComputeCapability);
     }
 
-    // generate kernel configuration file
-    {
-        unsigned clKernelStripes = 210;
-        unsigned clKernelPCount = 65536;
-        unsigned clKernelWindowSize = 12288;
-        unsigned clKernelLSize = 1024;
-        unsigned clKernelLSizeLog2 = 10;
-        unsigned clKernelTarget = 10;
-        unsigned clKernelWidth = 20;
-        unsigned multiplierSizeLimits[3] = {24, 31, 35};
-        std::ofstream config("xpm/cuda/config.cu", std::fstream::trunc);
-        config << "#define STRIPES " << clKernelStripes << '\n';
-        config << "#define WIDTH " << clKernelWidth << '\n';
-        config << "#define PCOUNT " << clKernelPCount << '\n';
-        config << "#define TARGET " << clKernelTarget << '\n';
-        config << "#define SIZE " << clKernelWindowSize << '\n';
-        config << "#define LSIZE " << clKernelLSize << '\n';
-        config << "#define LSIZELOG2 " << clKernelLSizeLog2 << '\n';
-        config << "#define LIMIT13 " << multiplierSizeLimits[0] << '\n';
-        config << "#define LIMIT14 " << multiplierSizeLimits[1] << '\n';
-        config << "#define LIMIT15 " << multiplierSizeLimits[2] << '\n';
-        dumpSieveConstants(
-            clKernelPCount,
-            clKernelLSize,
-            clKernelWindowSize * 32,
-            gPrimes + 13,
-            config);
-    }
-
-    std::string arguments = "";
-    std::vector<CUmodule> modules;
-    modules.resize(gpus.size());
-    for (unsigned i = 0; i < gpus.size(); i++) {
-        char kernelname[64];
-        char ccoption[64];
-        sprintf(kernelname, "kernelxpm_gpu%u.ptx", gpus[i].index);
-        sprintf(
-            ccoption,
-            "--gpu-architecture=compute_%i%i",
-            gpus[i].majorComputeCapability,
-            gpus[i].minorComputeCapability);
-        const char* options[] = {ccoption, arguments.c_str()};
-        CUDA_SAFE_CALL(cuCtxSetCurrent(gpus[i].context));
-        if (!cudaCompileKernel(
-                kernelname,
-                {"xpm/cuda/helpers.cu",
-                 "xpm/cuda/config.cu",
-                 "xpm/cuda/procs.cu",
-                 "xpm/cuda/fermat.cu",
-                 "xpm/cuda/sieve.cu",
-                 "xpm/cuda/sha256.cu",
-                 "xpm/cuda/json_sha256.cu",
-                 "xpm/cuda/benchmarks.cu"},
-                options,
-                arguments.empty() ? 1 : 2,
-                &modules[i],
-                gpus[i].majorComputeCapability,
-                gpus[i].minorComputeCapability,
-                true)) {
-            return false;
-        }
-    }
     int depth = 5 - 1;
     depth = std::max(depth, 2);
     depth = std::min(depth, 5);
+
+    std::vector<CUmodule> modules(gpus.size(), nullptr);
+    std::vector<CudaKernelConfig> selectedConfigs(gpus.size());
+    for (unsigned i = 0; i < gpus.size(); ++i) {
+        if (!selectCudaConfiguration(
+                gpus[i],
+                (unsigned)gpus.size(),
+                depth,
+                &selectedConfigs[i],
+                &modules[i])) {
+            return false;
+        }
+    }
 
     if (isBenchmark) {
         // Run benchmarks and exit
@@ -2507,7 +3151,7 @@ int main(int argc, char** argv) {
                 gpus[i].device,
                 modules[i],
                 depth,
-                clKernelLSize);
+                selectedConfigs[i].lsize);
         }
         return 0;
     }
@@ -2515,8 +3159,8 @@ int main(int argc, char** argv) {
     // Normal mining mode
     unsigned int sievePerRound = 5;
     for (unsigned i = 0; i < gpus.size(); ++i) {
-        PrimeMiner* miner =
-            new PrimeMiner(i, gpus.size(), sievePerRound, depth, clKernelLSize);
+        PrimeMiner* miner = new PrimeMiner(
+            i, gpus.size(), sievePerRound, depth, selectedConfigs[i].lsize);
         miner->Initialize(gpus[i].context, gpus[i].device, modules[i]);
 
         if (useGetWork) {

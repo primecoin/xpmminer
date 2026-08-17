@@ -139,9 +139,9 @@ else()
   endif()
 endif()
 
-# Post-build: copy every NVRTC source used by xpmclient.cpp. Keep this list
-# explicit so a required new kernel (notably json_sha256.cu) cannot be omitted
-# from an already-configured build merely because a glob did not trigger CMake.
+# Copy every NVRTC source used by xpmclient.cpp. This target runs on every build
+# so editing only a runtime-compiled kernel cannot leave a stale build-tree copy.
+# copy_if_different keeps the no-change path inexpensive.
 set(CUDA_KERNEL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/helpers.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/procs.cu
@@ -151,13 +151,15 @@ set(CUDA_KERNEL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/json_sha256.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks.cu
 )
-add_custom_command(TARGET xpmcuda POST_BUILD
+add_custom_target(xpmcuda_kernels ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/xpm/cuda
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CUDA_KERNEL_SOURCES}
         ${CMAKE_CURRENT_BINARY_DIR}/xpm/cuda/
     COMMENT "Copying CUDA kernel source files to build directory for NVRTC runtime compilation"
+    VERBATIM
 )
+add_dependencies(xpmcuda xpmcuda_kernels)
 
 message(STATUS "CUDA miner configuration complete")
 message(STATUS "Output executable: xpmcuda")

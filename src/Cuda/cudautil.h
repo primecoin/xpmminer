@@ -115,6 +115,7 @@ bool cudaCompileKernel(
     CUmodule* module,
     int majorComputeCapability,
     int minorComputeCapability,
-    bool needRebuild);
+    bool needRebuild,
+    bool verbose = true);
 
 #endif //__CUDALIB_H_

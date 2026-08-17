@@ -347,6 +347,7 @@ void cudaMultiplyBenchmark(
     CUDA_SAFE_CALL(cuCtxSynchronize());
 
     auto gpuEnd = std::chrono::steady_clock::now();
+    auto cpuBegin = std::chrono::steady_clock::now();
 
     if (isSquaring) {
         for (unsigned i = 0; i < elementsNum; i++) {
@@ -377,6 +378,8 @@ void cudaMultiplyBenchmark(
         }
     }
 
+    auto cpuEnd = std::chrono::steady_clock::now();
+
     CUDA_SAFE_CALL(mR.copyToHost());
 
     for (unsigned i = 0; i < elementsNum; i++) {
@@ -400,15 +403,23 @@ void cudaMultiplyBenchmark(
         std::chrono::duration_cast<std::chrono::microseconds>(gpuEnd - gpuBegin)
             .count() /
         1000.0;
-    double opsNum = ((elementsNum * MulOpsNum) / 1000000.0) / gpuTime * 1000.0;
+    double cpuTime =
+        std::chrono::duration_cast<std::chrono::microseconds>(cpuEnd - cpuBegin)
+            .count() /
+        1000.0;
+    double totalOps = (double)elementsNum * MulOpsNum;
+    double gpuMopsPerSec = (totalOps / 1000000.0) / (gpuTime / 1000.0);
+    double cpuMopsPerSec = (totalOps / 1000000.0) / (cpuTime / 1000.0);
+    double speedup = gpuMopsPerSec / cpuMopsPerSec;
 
     LOG_F(
         INFO,
-        "%s %u bits: %.3lfms (%.3lfM ops/sec)",
-        (isSquaring ? "square" : "multiply"),
+        "%s %u bits: GPU %.0lf Mops/s, CPU %.0lf Mops/s (%.2fx faster)",
+        (isSquaring ? "Square" : "Multiply"),
         mulOperandSize * 32,
-        gpuTime,
-        opsNum);
+        gpuMopsPerSec,
+        cpuMopsPerSec,
+        speedup);
 }
 
 void cudaFermatTestBenchmark(
@@ -497,6 +508,7 @@ void cudaFermatTestBenchmark(
     CUDA_SAFE_CALL(cuCtxSynchronize());
 
     auto gpuEnd = std::chrono::steady_clock::now();
+    auto cpuBegin = std::chrono::steady_clock::now();
 
     for (unsigned i = 0; i < elementsNum; i++) {
         mpz_sub_ui(mpzE.get_mpz_t(), cpuNumbersBuffer[i], 1);
@@ -546,20 +558,22 @@ void cudaFermatTestBenchmark(
             .count() /
         1000.0;
     double cpuTime =
-        std::chrono::duration_cast<std::chrono::microseconds>(cpuEnd - gpuEnd)
+        std::chrono::duration_cast<std::chrono::microseconds>(cpuEnd - cpuBegin)
             .count() /
         1000.0;
-    double opsNum = ((elementsNum) / 1000000.0) / gpuTime * 1000.0;
-    double cpuOpsNum = ((elementsNum) / 1000000.0) / cpuTime * 1000.0;
+    double gpuMopsPerSec =
+        ((double)elementsNum / 1000000.0) / (gpuTime / 1000.0);
+    double cpuMopsPerSec =
+        ((double)elementsNum / 1000000.0) / (cpuTime / 1000.0);
+    double speedup = gpuMopsPerSec / cpuMopsPerSec;
 
     LOG_F(
         INFO,
-        "%s %u bits: %.3lfms (%.3lfM ops/sec, single thread cpu: %.3lfM ops/sec)",
-        "Fermat tests",
+        "Fermat tests %u bits: GPU %.2lf Mops/s, CPU %.2lf Mops/s (%.2fx faster)",
         operandSize * 32,
-        gpuTime,
-        opsNum,
-        cpuOpsNum);
+        gpuMopsPerSec,
+        cpuMopsPerSec,
+        speedup);
 }
 
 void cudaHashmodBenchmark(
