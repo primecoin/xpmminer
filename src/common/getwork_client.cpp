@@ -611,7 +611,12 @@ void* GetWorkContext::runThread(void* arg) {
         }
     }
 
-    lws_sul_cancel(&ctx->_serviceTimer.sul);
+    // lws_sul_cancel() is not available in older distro releases such as
+    // libwebsockets 4.3.  Scheduling with LWS_SET_TIMER_USEC_CANCEL is the
+    // backwards-compatible cancellation API and remains supported by newer
+    // libwebsockets releases.
+    lws_sul_schedule(ctx->_wsContext, 0, &ctx->_serviceTimer.sul, nullptr,
+                     LWS_SET_TIMER_USEC_CANCEL);
     return nullptr;
 #else
     logFormattedWrite(ctx->_log, "ERROR: getwork requires libwebsockets, but it was not found at build time");
