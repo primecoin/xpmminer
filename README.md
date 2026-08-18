@@ -5,12 +5,17 @@ Open-source primecoin(XPM) GPU & CPU miner (http://primecoin.io/). Only solo min
 
 1 Requirements
 
-- OS supported: Linux, Windows
-- GPU manifacturer supported: NVidia (AMD is untested now)
+- OS supported: Linux, Windows, and macOS 15 or newer
+- NVIDIA GPU support: CUDA-capable GPUs supported by the installed CUDA toolkit and driver (Linux and Windows)
+- AMD GPU support: Radeon RX 6000 series / RDNA2 or newer through ROCm/HIP (Linux)
+- Apple GPU support: Apple silicon with an M1 GPU or newer through Metal (macOS 15 or newer)
+- Legacy OpenCL support remains available on Linux and Windows
+
+The Metal, HIP, and CUDA backends support both traditional `getblocktemplate` mining and WebSocket `blocktree.get_work`. Metal and HIP/CUDA on Linux were validated in this branch. The existing Windows CUDA and OpenCL build paths were not exercised as part of this work.
 
 2 Performance
 
-Now miner can be slow than concurrents.. With this miner Radeon R9 290X @ 1120/1500 16.2 times faster than Core i7 920 @ 4.2GHz. It means, you can reach 1.05 chains/day on overclocked Radeon 290X.
+Metal, HIP, and CUDA automatically tune their sieve configuration for the detected GPU. Performance depends on the device, driver, and compiler. Use `-b` for the kernel and correctness suite, or `--mining-benchmark SECONDS` to measure the complete mining pipeline without network and submission latency.
 
 3 Building
 
