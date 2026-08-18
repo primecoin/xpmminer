@@ -25,8 +25,10 @@ static void logFormattedWrite(void* log, const char* fmt, ...) {
     va_list arguments;
     va_start(arguments, fmt);
     printf("%s: ", buffer);
-    printf(fmt, arguments);
+    vprintf(
+        fmt, arguments); // FIX: was printf(fmt, arguments) - must be vprintf!
     printf("\n");
+    va_end(arguments);
 }
 
 #endif //__DEBUG_H_

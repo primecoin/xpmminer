@@ -18,8 +18,10 @@ list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH})
 find_package(HIP QUIET)
 
 if (NOT HIP_FOUND)
-    message(STATUS "HIP not found. Skipping HIP miner build.")
-    message(STATUS "  To build HIP miner, install ROCm from https://rocm.docs.amd.com/")
+    message(STATUS
+      "ROCm/HIP was not found, so the HIP miner will not be built. "
+      "Install the ROCm/HIP development files and rerun CMake."
+    )
     return()
 endif()
 
@@ -33,7 +35,11 @@ find_library(HIP_HIPRTC_LIBRARY hiprtc
 )
 
 if (NOT HIP_HIPRTC_LIBRARY)
-    message(STATUS "HIPRTC library not found. Skipping HIP miner build.")
+    message(STATUS
+      "The HIP runtime compilation library (HIPRTC) was not found, so the "
+      "HIP miner will not be built. Install the ROCm/HIP development files "
+      "and rerun CMake."
+    )
     return()
 endif()
 
@@ -81,6 +87,11 @@ include_directories(
   ${ROCM_PATH}/include
 )
 
+if (Libwebsockets_FOUND)
+  include_directories(${LIBWEBSOCKETS_INCLUDE_DIRS})
+  add_definitions(-DHAVE_LIBWEBSOCKETS)
+endif()
+
 # Source files
 set(HIP_MINER_SOURCES
     xpmclient_hip.cpp
@@ -111,6 +122,10 @@ target_link_libraries(xpmhip
   ${HIP_HIPRTC_LIBRARY}  # HIPRTC for runtime compilation
   dl
 )
+
+if (Libwebsockets_FOUND)
+  target_link_libraries(xpmhip ${LIBWEBSOCKETS_LIBRARIES})
+endif()
 
 # Post-build: Auto-copy kernel files to build directory
 # This makes the binary work immediately after 'make' without manual file copying

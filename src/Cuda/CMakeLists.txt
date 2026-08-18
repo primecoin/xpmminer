@@ -21,10 +21,10 @@ endif()
 
 # If CUDA not found, skip building
 if (NOT CUDA_FOUND)
-  message(STATUS "CUDA not found. Skipping CUDA miner build.")
-  message(STATUS "  To build CUDA miner, install NVIDIA CUDA Toolkit:")
-  message(STATUS "  Ubuntu/Debian: sudo apt install nvidia-cuda-toolkit")
-  message(STATUS "  Or download from: https://developer.nvidia.com/cuda-downloads")
+  message(STATUS
+    "CUDA Toolkit was not found, so the CUDA miner will not be built. "
+    "Install the NVIDIA CUDA Toolkit development files and rerun CMake."
+  )
   return()
 endif()
 
@@ -66,6 +66,11 @@ include_directories(
   ${CMAKE_BINARY_DIR}
 )
 
+if (Libwebsockets_FOUND)
+  include_directories(${LIBWEBSOCKETS_INCLUDE_DIRS})
+  add_definitions(-DHAVE_LIBWEBSOCKETS)
+endif()
+
 add_executable(xpmcuda
     xpmclient.cpp
     benchmarks.cpp
@@ -95,6 +100,10 @@ if (${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.17.0" AND CUDAToolkit_FOUND)
     CUDA::cuda_driver
     CUDA::nvrtc
   )
+
+  if (Libwebsockets_FOUND)
+    target_link_libraries(xpmcuda ${LIBWEBSOCKETS_LIBRARIES})
+  endif()
 else()
   # Legacy FindCUDA
   find_library(CUDA_DRIVER_LIBRARY cuda
@@ -107,10 +116,16 @@ else()
   )
 
   if (NOT CUDA_DRIVER_LIBRARY)
-    message(FATAL_ERROR "CUDA driver library (libcuda) not found")
+    message(FATAL_ERROR
+      "The CUDA driver development library (libcuda) was not found. "
+      "Install the NVIDIA CUDA development files and rerun CMake."
+    )
   endif()
   if (NOT CUDA_nvrtc_LIBRARY)
-    message(FATAL_ERROR "CUDA NVRTC library (libnvrtc) not found")
+    message(FATAL_ERROR
+      "The CUDA runtime compilation library (libnvrtc) was not found. "
+      "Install the NVIDIA CUDA Toolkit development files and rerun CMake."
+    )
   endif()
 
   target_link_libraries(xpmcuda
@@ -124,19 +139,33 @@ else()
     ${CUDA_DRIVER_LIBRARY}
     ${CUDA_nvrtc_LIBRARY}
   )
+
+  if (Libwebsockets_FOUND)
+    target_link_libraries(xpmcuda ${LIBWEBSOCKETS_LIBRARIES})
+  endif()
 endif()
 
-# Post-build: Auto-copy kernel files to build directory
-# This makes the binary work immediately after 'make' without manual file copying
-# Uses file(GLOB) to automatically find all .cu files (no hardcoded paths)
-file(GLOB CUDA_KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cu")
-add_custom_command(TARGET xpmcuda POST_BUILD
+# Copy every NVRTC source used by xpmclient.cpp. This target runs on every build
+# so editing only a runtime-compiled kernel cannot leave a stale build-tree copy.
+# copy_if_different keeps the no-change path inexpensive.
+set(CUDA_KERNEL_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/helpers.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/procs.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/fermat.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/sieve.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/sha256.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/json_sha256.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks.cu
+)
+add_custom_target(xpmcuda_kernels ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/xpm/cuda
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CUDA_KERNEL_SOURCES}
         ${CMAKE_CURRENT_BINARY_DIR}/xpm/cuda/
     COMMENT "Copying CUDA kernel source files to build directory for NVRTC runtime compilation"
+    VERBATIM
 )
+add_dependencies(xpmcuda xpmcuda_kernels)
 
 message(STATUS "CUDA miner configuration complete")
 message(STATUS "Output executable: xpmcuda")

@@ -126,7 +126,8 @@ sum24(const uint32_t* data, unsigned size, uint32_t* moddata) {
 #pragma unroll
     for (unsigned i = 0, bitPos = 24; bitPos < size24; bitPos += 24, i++) {
         uint64_t v64 = *(uint64_t*)(data + bitPos / 32) >> (bitPos % 32);
-        acc += __umul24(v64 & 0xFFFFFF, moddata[i]);
+        // Use regular multiply - faster on modern GPUs (CC 2.0+)
+        acc += ((v64 & 0xFFFFFF) * moddata[i]);
     }
 
     return acc;

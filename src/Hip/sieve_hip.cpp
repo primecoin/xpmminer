@@ -1,6 +1,8 @@
 #include "hip/hip_runtime.h"
 #define S1RUNS (sizeof(nps_all) / sizeof(uint32_t))
+#ifndef NLIFO
 #define NLIFO 4
+#endif
 
 // for 1024 threads in group
 #if (LSIZELOG2 == 10)
@@ -10,6 +12,8 @@ __constant__ uint32_t
 __constant__ uint32_t nps_all[] = {3, 3, 4, 5, 6, 6, 6, 7, 7}; // 512 threads
 #elif (LSIZELOG2 == 8)
 __constant__ uint32_t nps_all[] = {2, 2, 3, 4, 5, 5, 5, 6, 6}; // 256 threads
+#elif (LSIZELOG2 == 7)
+__constant__ uint32_t nps_all[] = {1, 1, 2, 3, 4, 4, 4, 5, 5}; // 128 threads
 #else
 #error "Unsupported LSIZELOG2 constant"
 #endif
@@ -45,9 +49,7 @@ extern "C" __global__ void sieve(
         const uint32_t prime = tmp1.x;
         const float fiprime = __int_as_float(tmp1.y);
 
-        const uint32_t loffset = offset[poff + ip];
-        const uint32_t orb = (loffset >> 31) ^ 0x1;
-        uint32_t pos = loffset & 0x7FFFFFFF;
+        uint32_t pos = offset[poff + ip];
 
         poff += 1u << nps;
         pos += ((uint32_t)(fentry * fiprime) * prime);
@@ -70,10 +72,10 @@ extern "C" __global__ void sieve(
             uint32_t* s3 = &sieve[vpos.z >> 5];
             uint32_t* s4 = &sieve[vpos.w >> 5];
             uint32_t* se = &sieve[SIZE];
-            uint32_t bit1 = orb << (vpos.x % 32);
-            uint32_t bit2 = orb << (vpos.y % 32);
-            uint32_t bit3 = orb << (vpos.z % 32);
-            uint32_t bit4 = orb << (vpos.w % 32);
+            uint32_t bit1 = 1u << (vpos.x % 32);
+            uint32_t bit2 = 1u << (vpos.y % 32);
+            uint32_t bit3 = 1u << (vpos.z % 32);
+            uint32_t bit4 = 1u << (vpos.w % 32);
             const uint32_t add = var * 4 * prime >> 5;
             while (s4 < se) {
                 atomicOr(s1, bit1);
@@ -95,10 +97,10 @@ extern "C" __global__ void sieve(
         } else {
             const uint32_t add = var * 4 * prime;
             while (vpos.w < SIZE * 32) {
-                atomicOr(&sieve[vpos.x >> 5], orb << (vpos.x % 32));
-                atomicOr(&sieve[vpos.y >> 5], orb << (vpos.y % 32));
-                atomicOr(&sieve[vpos.z >> 5], orb << (vpos.z % 32));
-                atomicOr(&sieve[vpos.w >> 5], orb << (vpos.w % 32));
+                atomicOr(&sieve[vpos.x >> 5], 1u << (vpos.x % 32));
+                atomicOr(&sieve[vpos.y >> 5], 1u << (vpos.y % 32));
+                atomicOr(&sieve[vpos.z >> 5], 1u << (vpos.z % 32));
+                atomicOr(&sieve[vpos.w >> 5], 1u << (vpos.w % 32));
                 vpos.x += add;
                 vpos.y += add;
                 vpos.z += add;
@@ -106,11 +108,11 @@ extern "C" __global__ void sieve(
             }
 
             if (vpos.x < SIZE * 32)
-                atomicOr(&sieve[vpos.x >> 5], orb << (vpos.x % 32));
+                atomicOr(&sieve[vpos.x >> 5], 1u << (vpos.x % 32));
             if (vpos.y < SIZE * 32)
-                atomicOr(&sieve[vpos.y >> 5], orb << (vpos.y % 32));
+                atomicOr(&sieve[vpos.y >> 5], 1u << (vpos.y % 32));
             if (vpos.z < SIZE * 32)
-                atomicOr(&sieve[vpos.z >> 5], orb << (vpos.z % 32));
+                atomicOr(&sieve[vpos.z >> 5], 1u << (vpos.z % 32));
         }
     }
 

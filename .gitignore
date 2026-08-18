@@ -1,5 +1,17 @@
 build
 .vscode
+logs/
+
+# HIP runtime compilation and autotuning caches
+xpmhip-cache/
+kernelxpm_*.hipbin
+kernelxpm_*.hipbin.fingerprint
+.xpmhip-autotune-*.cfg
+
+# CUDA runtime compilation and autotuning caches
+xpmcuda-cache/
+kernelxpm_*.ptx
+kernelxpm_*.ptx.fingerprint
 
 # nix build
 result/

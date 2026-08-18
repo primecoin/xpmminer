@@ -12,6 +12,7 @@
 #include <gmpxx.h>
 #include "cudautil.h"
 #include "getblocktemplate.h"
+#include "getwork_client.h"
 #include "sha256.h"
 #include "system.h"
 #include "uint256.h"
@@ -56,12 +57,30 @@ struct config_t {
     uint32_t LIMIT15;
 };
 
+struct MiningBenchmarkResult {
+    bool completed;
+    double elapsedSeconds;
+    double effectiveScanGps;
+    double sieveCandidatesPerSecond;
+    double finalCandidatesPerSecond;
+    uint64_t pipelineErrors;
+
+    MiningBenchmarkResult()
+        : completed(false),
+          elapsedSeconds(0.0),
+          effectiveScanGps(0.0),
+          sieveCandidatesPerSecond(0.0),
+          finalCandidatesPerSecond(0.0),
+          pipelineErrors(0) {}
+};
+
 struct CUDADeviceInfo {
     int index;
     CUdevice device;
     CUcontext context;
     int majorComputeCapability;
     int minorComputeCapability;
+    char name[128];
 };
 
 template <typename T>
@@ -186,7 +205,11 @@ class PrimeMiner {
         unsigned LSize);
     ~PrimeMiner();
 
-    bool Initialize(CUcontext context, CUdevice device, CUmodule module);
+    bool Initialize(
+        CUcontext context,
+        CUdevice device,
+        CUmodule module,
+        bool reportConfiguration = true);
 
     config_t getConfig() {
         return mConfig;
@@ -194,6 +217,13 @@ class PrimeMiner {
 
     bool MakeExit;
     void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
+    MiningBenchmarkResult MiningGetWork(
+        GetWorkContext* ctx,
+        unsigned benchmarkSeconds = 0,
+        bool reportBenchmarkResults = true);
+    MiningBenchmarkResult BenchmarkMining(
+        unsigned benchmarkSeconds,
+        bool reportResults = false);
 
    private:
     void FermatInit(pipeline_t& fermat, unsigned mfs);
@@ -231,6 +261,17 @@ class PrimeMiner {
     CUfunction mFermatKernel352;
     CUfunction mFermatKernel320;
     CUfunction mFermatCheck;
+
+    // JSON getwork mode kernel and buffers
+    CUfunction mJsonHashMod;
+    cudaBuffer<uint32_t> mJsonMidstateBuf; // JSON SHA256 midstate (8 uint32_t)
+    cudaBuffer<char>
+        mJsonRemainingPrefixBuf; // Remaining JSON prefix after midstate
+    cudaBuffer<uint32_t> mJsonFoundBuf; // Found nonces for JSON mode
+    cudaBuffer<uint32_t>
+        mJsonPrimorialBuf; // Primorial bit fields for JSON mode
+    cudaBuffer<uint32_t> mJsonCountBuf; // Count of found candidates
+
     info_t final;
     cudaBuffer<uint32_t> hashBuf;
     timeMark workBeginPoint;

@@ -13,6 +13,7 @@
 #include <gmp.h>
 #include <gmpxx.h>
 #include "getblocktemplate.h"
+#include "getwork_client.h"
 #include "hiputil.h"
 #include "sha256.h"
 #include "system.h"
@@ -56,6 +57,23 @@ struct config_t {
     uint32_t LIMIT13;
     uint32_t LIMIT14;
     uint32_t LIMIT15;
+};
+
+struct MiningBenchmarkResult {
+    bool completed;
+    double elapsedSeconds;
+    double effectiveScanGps;
+    double sieveCandidatesPerSecond;
+    double finalCandidatesPerSecond;
+    uint64_t pipelineErrors;
+
+    MiningBenchmarkResult()
+        : completed(false),
+          elapsedSeconds(0.0),
+          effectiveScanGps(0.0),
+          sieveCandidatesPerSecond(0.0),
+          finalCandidatesPerSecond(0.0),
+          pipelineErrors(0) {}
 };
 
 struct HIPDeviceInfo {
@@ -189,7 +207,11 @@ class PrimeMiner {
         unsigned LSize);
     ~PrimeMiner();
 
-    bool Initialize(hipCtx_t context, hipDevice_t device, hipModule_t module);
+    bool Initialize(
+        hipCtx_t context,
+        hipDevice_t device,
+        hipModule_t module,
+        bool reportConfiguration = true);
 
     config_t getConfig() {
         return mConfig;
@@ -197,6 +219,13 @@ class PrimeMiner {
 
     bool MakeExit;
     void Mining(GetBlockTemplateContext* gbp, SubmitContext* submit);
+    MiningBenchmarkResult MiningGetWork(
+        GetWorkContext* ctx,
+        unsigned benchmarkSeconds = 0,
+        bool reportBenchmarkResults = true);
+    MiningBenchmarkResult BenchmarkMining(
+        unsigned benchmarkSeconds,
+        bool reportResults = false);
 
    private:
     void FermatInit(pipeline_t& fermat, unsigned mfs);
@@ -234,6 +263,16 @@ class PrimeMiner {
     hipFunction_t mFermatKernel352;
     hipFunction_t mFermatKernel320;
     hipFunction_t mFermatCheck;
+
+    // JSON getwork mode kernel and buffers
+    hipFunction_t mJsonHashMod;
+    hipBuffer<uint32_t> mJsonMidstateBuf; // JSON SHA256 midstate (8 uint32_t)
+    hipBuffer<char>
+        mJsonRemainingPrefixBuf; // Remaining JSON prefix after midstate
+    hipBuffer<uint32_t> mJsonFoundBuf; // Found nonces for JSON mode
+    hipBuffer<uint32_t> mJsonPrimorialBuf; // Primorial bit fields for JSON mode
+    hipBuffer<uint32_t> mJsonCountBuf; // Count of found candidates
+
     info_t final;
     hipBuffer<uint32_t> hashBuf;
     timeMark workBeginPoint;

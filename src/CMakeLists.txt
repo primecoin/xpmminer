@@ -1,11 +1,30 @@
-cmake_minimum_required(VERSION 3.5)
-project(xpmminer LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.16)
+
+# Keep release binaries compatible with macOS 15 and later. This must be set
+# before project() so CMake applies the deployment target during compiler
+# detection as well as compilation and linking. Callers can still select a
+# different target explicitly with -DCMAKE_OSX_DEPLOYMENT_TARGET=<version>.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING
+      "Minimum macOS version supported by the build" FORCE)
+endif()
+
+project(xpmminer)
 
 option(DEBUG_MINING_AMD_OPENCL "Print performance counters")
 option(BUILDCPUMINER "build CPU miner" ON)
-option(BUILDOPENCLMINER "build OpenCL miner" ON)
+
+# Automatically disable OpenCL on macOS (deprecated, use Metal instead)
+if(APPLE)
+    option(BUILDOPENCLMINER "build OpenCL miner" OFF)
+    message(STATUS "OpenCL miner disabled on macOS (deprecated). Use Metal miner instead.")
+else()
+    option(BUILDOPENCLMINER "build OpenCL miner" ON)
+endif()
+
 option(BUILDCUDAMINER "build CUDA miner" ON)
 option(BUILDHIPMINER "build HIP miner (for AMD GPUs via ROCm)" ON)
+option(BUILDMETALMINER "build Metal miner (for Apple Silicon)" ON)
 
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
         ${CMAKE_SOURCE_DIR}/cmake
@@ -15,6 +34,26 @@ find_package(OpenSSL REQUIRED)
 IF (BUILDOPENCLMINER)
   include(FindOpenCL)
 endif()
+
+# Find libwebsockets for getwork protocol support
+find_package(Libwebsockets QUIET)
+if (Libwebsockets_FOUND)
+    message(STATUS "libwebsockets found: ${Libwebsockets_VERSION}")
+elseif(APPLE AND BUILDMETALMINER)
+    message(FATAL_ERROR
+      "Required dependency libwebsockets was not found.\n"
+      "The Metal miner requires it for WebSocket blocktree.get_work support.\n"
+      "Install the libwebsockets development files and rerun CMake, or disable "
+      "the Metal miner target."
+    )
+else()
+    message(WARNING
+      "Optional dependency libwebsockets was not found.\n"
+      "WebSocket blocktree.get_work mining will not be available.\n"
+      "Install the libwebsockets development files and rerun CMake to enable it."
+    )
+endif()
+
 include(FindDependencies)
 include(TestBigEndian)
 include(CheckTypeSize)
@@ -73,4 +112,7 @@ IF (BUILDCUDAMINER)
 ENDIF()
 IF (BUILDHIPMINER)
   add_subdirectory(Hip)
+ENDIF()
+IF (BUILDMETALMINER AND APPLE)
+  add_subdirectory(Metal)
 ENDIF()
